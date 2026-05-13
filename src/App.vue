@@ -1,16 +1,8 @@
 <script setup>
-import { ref } from 'vue'
-
-const show = ref(false)
+// App.vue 是整个应用的"外壳"
+// RouterView 是路由的"占位符",会根据当前 URL 显示对应页面
 </script>
 
 <template>
-  <div style="padding: 20px">
-    <h1>智能记账</h1>
-    <p>这是测试 Vant 是否能用</p>
-
-    <van-button type="primary" @click="show = true"> 点我试试 Vant 按钮 </van-button>
-
-    <van-toast v-model:show="show" message="Vant 装好了!" />
-  </div>
+  <RouterView />
 </template>
