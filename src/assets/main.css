@@ -1,35 +1,67 @@
-@import './base.css';
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --primary: #6b6ef5;
+  --primary-light: #eaebfe;
+  --primary-dark: #5558d4;
+  --bg: #f3f4f8;
+  --white: #ffffff;
+  --text: #1a1a2e;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  --border: #f0f0f5;
+  --red: #ef4444;
+  --green: #10b981;
+  --orange: #f59e0b;
+  --radius-sm: 8px;
+  --radius: 16px;
+  --radius-lg: 24px;
+  --shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+
+  /* Vant theme */
+  --van-primary-color: #6b6ef5;
+  --van-button-primary-background: #6b6ef5;
+  --van-button-primary-border-color: #6b6ef5;
+  --van-tabbar-item-active-color: #6b6ef5;
+  --van-nav-bar-title-font-size: 18px;
+  --van-nav-bar-title-text-color: #1a1a2e;
+  --van-nav-bar-background: transparent;
+  --van-field-background: #f5f6fa;
+  --van-cell-background: #ffffff;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #e8e8f0;
+  /* Center the phone-width app on desktop */
+  display: flex;
+  justify-content: center;
+}
 
 #app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  font-weight: normal;
+  width: 100%;
+  max-width: 480px;
+  height: 100%;
+  background: var(--bg);
+  position: relative;
+  overflow: hidden;
+  /* Subtle phone-frame shadow on desktop */
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.12);
 }
 
-a,
-.green {
-  text-decoration: none;
-  color: hsla(160, 100%, 37%, 1);
-  transition: 0.4s;
-  padding: 3px;
-}
-
-@media (hover: hover) {
-  a:hover {
-    background-color: hsla(160, 100%, 37%, 0.2);
-  }
-}
-
-@media (min-width: 1024px) {
-  body {
-    display: flex;
-    place-items: center;
-  }
-
-  #app {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 0 2rem;
-  }
+/* Remove hairline borders on nav bar */
+.van-nav-bar::after {
+  display: none !important;
 }

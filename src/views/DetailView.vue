@@ -1,8 +1,466 @@
-<script setup></script>
+<script setup>
+import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
+import { use } from 'echarts/core'
+import { LineChart, BarChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+import VChart from 'vue-echarts'
+import { useTransactionsStore } from '@/stores/transactions'
+
+use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
+
+const router = useRouter()
+const txStore = useTransactionsStore()
+
+const view = ref('list')
+const periodFilter = ref('month')
+
+const CATEGORY_ICONS = {
+  餐饮: '🍴', 饮品: '☕', 交通: '🚇', 购物: '🛍️',
+  教育: '📚', 娱乐: '🎮', 医疗: '💊', 工资: '💰', 兼职: '💼',
+}
+
+const CATEGORY_BG = {
+  餐饮: '#fff3e6', 饮品: '#ede9fe', 交通: '#dbeafe', 购物: '#fce7f3',
+  教育: '#d1fae5', 娱乐: '#fef3c7', 医疗: '#ccfbf1', 工资: '#d1fae5',
+}
+
+function formatDateLabel(d) {
+  const date = new Date(d)
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  const diff = Math.round((today - target) / 86400000)
+  if (diff === 0) return `今天 · ${date.getMonth() + 1}月${date.getDate()}日`
+  if (diff === 1) return `昨天 · ${date.getMonth() + 1}月${date.getDate()}日`
+  return `${date.getMonth() + 1}月${date.getDate()}日`
+}
+
+function formatTime(date) {
+  const d = new Date(date)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+const lineOption = computed(() => ({
+  grid: { left: 16, right: 16, top: 16, bottom: 24 },
+  xAxis: {
+    type: 'category',
+    data: ['7月', '8月', '9月', '10月', '11月', '12月'],
+    axisLine: { show: false },
+    axisTick: { show: false },
+    axisLabel: { color: '#9ca3af', fontSize: 12 },
+  },
+  yAxis: { show: false, type: 'value' },
+  series: [
+    {
+      type: 'line',
+      smooth: true,
+      data: [1200, 1550, 1800, 1900, 2096, 2358],
+      symbol: 'circle',
+      symbolSize: 8,
+      lineStyle: { color: '#6b6ef5', width: 2.5 },
+      itemStyle: { color: '#6b6ef5', borderColor: 'white', borderWidth: 2 },
+      areaStyle: {
+        color: {
+          type: 'linear',
+          x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: 'rgba(107,110,245,0.2)' },
+            { offset: 1, color: 'rgba(107,110,245,0)' },
+          ],
+        },
+      },
+      label: {
+        show: true,
+        position: 'top',
+        formatter: (p) => (p.dataIndex === 5 ? `¥${p.value}` : ''),
+        color: '#6b6ef5',
+        fontSize: 12,
+      },
+    },
+  ],
+}))
+
+const CATEGORY_COLORS = {
+  餐饮: '#f59e0b', 购物: '#ec4899', 饮品: '#8b5cf6',
+  教育: '#10b981', 交通: '#3b82f6',
+}
+
+const categoryBars = computed(() => {
+  const totals = txStore.categoryTotals
+  const max = totals[0]?.value || 1
+  return totals.map((c) => ({
+    ...c,
+    width: Math.round((c.value / max) * 100),
+    color: CATEGORY_COLORS[c.name] || '#6b6ef5',
+  }))
+})
+</script>
 
 <template>
-  <div style="padding: 40px">
-    <h1 style="color: #6e73f2">P5 明细页</h1>
-    <p>主体 Tab 2</p>
+  <div class="page">
+    <h2 class="page-title">明细</h2>
+
+    <!-- Toggle -->
+    <div class="toggle-wrap">
+      <div class="toggle">
+        <button :class="['toggle-btn', { active: view === 'list' }]" @click="view = 'list'">
+          列表
+        </button>
+        <button :class="['toggle-btn', { active: view === 'chart' }]" @click="view = 'chart'">
+          图表
+        </button>
+      </div>
+    </div>
+
+    <!-- LIST VIEW -->
+    <template v-if="view === 'list'">
+      <div class="filter-row">
+        <button :class="['chip', { active: periodFilter === 'month' }]" @click="periodFilter = 'month'">
+          本月
+        </button>
+        <button class="chip">全部分类</button>
+        <button class="chip">筛选</button>
+      </div>
+
+      <div v-for="group in txStore.groupedByDate" :key="group.dateKey" class="group">
+        <div class="date-header">
+          <span class="date-label">{{ formatDateLabel(group.date) }}</span>
+          <span class="date-total">支出 ¥{{ group.total }}</span>
+        </div>
+        <div class="card">
+          <div
+            v-for="(tx, i) in group.items"
+            :key="tx.id"
+            class="tx-item"
+            :class="{ last: i === group.items.length - 1 }"
+            @click="router.push({ name: 'edit-transaction', params: { id: tx.id } })"
+          >
+            <div class="tx-icon" :style="{ background: CATEGORY_BG[tx.categoryName] || '#f3f4f6' }">
+              {{ CATEGORY_ICONS[tx.categoryName] || '💳' }}
+            </div>
+            <div class="tx-info">
+              <p class="tx-name">{{ tx.merchant }}</p>
+              <p class="tx-meta">{{ tx.categoryName }} · {{ formatTime(tx.spentAt) }}</p>
+            </div>
+            <span :class="['tx-amount', tx.type === 'income' ? 'income' : '']">
+              {{ tx.type === 'income' ? '+' : '-' }}¥{{ tx.amount }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- CHART VIEW -->
+    <template v-else>
+      <!-- Trend chart -->
+      <div class="card">
+        <div class="section-header">
+          <span class="section-title">月度趋势</span>
+          <span class="label-muted">最近 6 个月</span>
+        </div>
+        <v-chart :option="lineOption" style="height: 180px" />
+      </div>
+
+      <!-- Comparison -->
+      <div class="compare-row">
+        <div class="compare-card">
+          <p class="compare-val up">+12.5%</p>
+          <p class="compare-label">环比上月</p>
+          <p class="compare-sub">多花 ¥262</p>
+        </div>
+        <div class="compare-card">
+          <p class="compare-val down">-8.2%</p>
+          <p class="compare-label">同比去年</p>
+          <p class="compare-sub">少花 ¥210</p>
+        </div>
+      </div>
+
+      <!-- Category bars -->
+      <div class="card">
+        <div class="section-header">
+          <span class="section-title">分类支出</span>
+          <span class="label-muted">本月</span>
+        </div>
+        <div v-for="cat in categoryBars" :key="cat.name" class="cat-bar-row">
+          <div class="cat-bar-header">
+            <span class="cat-name">{{ cat.name }}</span>
+            <span class="cat-amount">¥{{ cat.value }}</span>
+          </div>
+          <div class="bar-track">
+            <div class="bar-fill" :style="{ width: cat.width + '%', background: cat.color }"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI insight -->
+      <div class="card ai-card">
+        <div class="ai-header">
+          <div class="ai-avatar">🤖</div>
+          <span class="ai-title">AI 洞察</span>
+        </div>
+        <p class="ai-text">
+          你这个月在餐饮上花了 ¥943，占 40%。比上月多了 ¥120，主要因为外卖次数增加 →
+        </p>
+      </div>
+    </template>
   </div>
 </template>
+
+<style scoped>
+.page {
+  padding: 0 16px 16px;
+  background: #f3f4f8;
+  min-height: 100%;
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 700;
+  padding: 20px 4px 16px;
+}
+
+.toggle-wrap {
+  margin-bottom: 14px;
+}
+
+.toggle {
+  display: flex;
+  background: #eaebfe;
+  border-radius: 12px;
+  padding: 4px;
+}
+
+.toggle-btn {
+  flex: 1;
+  height: 36px;
+  border: none;
+  border-radius: 9px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  background: transparent;
+  color: #6b7280;
+  transition: all 0.2s;
+}
+
+.toggle-btn.active {
+  background: white;
+  color: #6b6ef5;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.chip {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: none;
+  font-size: 13px;
+  cursor: pointer;
+  background: white;
+  color: #6b7280;
+}
+
+.chip.active {
+  background: #6b6ef5;
+  color: white;
+}
+
+.group {
+  margin-bottom: 16px;
+}
+
+.date-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 4px 8px;
+  font-size: 14px;
+  color: #6b7280;
+}
+
+.date-total {
+  font-size: 13px;
+}
+
+.card {
+  background: white;
+  border-radius: 20px;
+  padding: 6px 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  margin-bottom: 16px;
+}
+
+.tx-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #f5f6fa;
+  cursor: pointer;
+}
+
+.tx-item.last {
+  border-bottom: none;
+}
+
+.tx-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.tx-info { flex: 1 }
+
+.tx-name {
+  font-size: 15px;
+  font-weight: 500;
+  margin-bottom: 3px;
+}
+
+.tx-meta {
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.tx-amount {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.tx-amount.income {
+  color: #10b981;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0 4px;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.label-muted {
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.compare-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.compare-card {
+  flex: 1;
+  background: white;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+.compare-val {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.compare-val.up { color: #ef4444 }
+.compare-val.down { color: #10b981 }
+
+.compare-label {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.compare-sub {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+.cat-bar-row {
+  padding: 10px 0;
+  border-bottom: 1px solid #f5f6fa;
+}
+
+.cat-bar-row:last-child { border-bottom: none }
+
+.cat-bar-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.cat-name {
+  font-size: 14px;
+  color: #374151;
+}
+
+.cat-amount {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.bar-track {
+  height: 6px;
+  background: #f3f4f6;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s;
+}
+
+.ai-card {
+  padding: 16px;
+}
+
+.ai-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ai-avatar {
+  width: 36px;
+  height: 36px;
+  background: #6b6ef5;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.ai-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #6b6ef5;
+}
+
+.ai-text {
+  font-size: 14px;
+  color: #6b7280;
+  line-height: 1.6;
+}
+</style>

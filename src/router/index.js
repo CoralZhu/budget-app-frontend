@@ -8,13 +8,22 @@ const router = createRouter({
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },
     { path: '/register', name: 'register', component: () => import('@/views/RegisterView.vue') },
 
-    // 主体区(底部 4 个 Tab)
-    { path: '/home', name: 'home', component: () => import('@/views/HomeView.vue') },
-    { path: '/detail', name: 'detail', component: () => import('@/views/DetailView.vue') },
-    { path: '/record', name: 'record', component: () => import('@/views/RecordView.vue') },
-    { path: '/profile', name: 'profile', component: () => import('@/views/ProfileView.vue') },
+    // 主体区（共享底部 Tab 栏）
+    {
+      path: '/app',
+      component: () => import('@/views/TabLayout.vue'),
+      children: [
+        { path: '', redirect: { name: 'home' } },
+        { path: 'home', name: 'home', component: () => import('@/views/HomeView.vue') },
+        { path: 'detail', name: 'detail', component: () => import('@/views/DetailView.vue') },
+        { path: 'profile', name: 'profile', component: () => import('@/views/ProfileView.vue') },
+      ],
+    },
 
-    // 二级页面
+    // 记账页（独立全屏，有自己的底部 mode bar）
+    { path: '/record', name: 'record', component: () => import('@/views/RecordView.vue') },
+
+    // 二级页面（无底部 Tab 栏）
     {
       path: '/edit-transaction/:id',
       name: 'edit-transaction',
