@@ -181,7 +181,7 @@ onUnmounted(() => clearInterval(voiceTimer))
           <span class="currency">¥</span>
           <input
             v-model="amountStr"
-            type="number"
+            type="text"
             class="amount-input"
             placeholder="0.00"
             inputmode="decimal"
@@ -212,9 +212,8 @@ onUnmounted(() => clearInterval(voiceTimer))
 
       <div class="card info-card">
         <van-field
-          v-model="dateStr"
-          type="date"
-          :label="formatDisplayDate(dateStr)"
+          :model-value="formatDisplayDate(dateStr)"
+          label="日期"
           :border="false"
           class="info-field"
           readonly
@@ -968,17 +967,20 @@ onUnmounted(() => clearInterval(voiceTimer))
   height: 52px;
   font-size: 17px;
   font-weight: 600;
+  background: #6b6ef5 !important;
+  border-color: #6b6ef5 !important;
+  color: white !important;
 }
 
 .rec-btn.stop {
-  background: #ef4444 !important;
-  border-color: #ef4444 !important;
+  background: #6b6ef5 !important;
+  border-color: #6b6ef5 !important;
 }
 
 .rec-btn.retry {
-  background: #f3f4f6 !important;
-  border-color: #f3f4f6 !important;
-  color: #6b7280 !important;
+  background: #6b6ef5 !important;
+  border-color: #6b6ef5 !important;
+  color: white !important;
 }
 
 /* Bottom mode bar — uses transform centering to stay within max-width */
