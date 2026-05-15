@@ -1,30 +1,33 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { showToast } from 'vant'
 import { use } from 'echarts/core'
 import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
+import { getTransactions } from '@/api/transaction'
 import { useTransactionsStore } from '@/stores/transactions'
+import { useCategoriesStore } from '@/stores/categories'
+import {
+  formatTransactionAmount,
+  getTransactionIcon,
+  getTransactionIconBg,
+  getTransactionMeta,
+  getTransactionTitle,
+} from '@/utils/transactionDisplay'
 
 use([LineChart, BarChart, GridComponent, TooltipComponent, CanvasRenderer])
 
 const router = useRouter()
 const txStore = useTransactionsStore()
+const catStore = useCategoriesStore()
 
 const view = ref('list')
 const periodFilter = ref('month')
-
-const CATEGORY_ICONS = {
-  餐饮: '🍴', 饮品: '☕', 交通: '🚇', 购物: '🛍️',
-  教育: '📚', 娱乐: '🎮', 医疗: '💊', 工资: '💰', 兼职: '💼',
-}
-
-const CATEGORY_BG = {
-  餐饮: '#fff3e6', 饮品: '#ede9fe', 交通: '#dbeafe', 购物: '#fce7f3',
-  教育: '#d1fae5', 娱乐: '#fef3c7', 医疗: '#ccfbf1', 工资: '#d1fae5',
-}
+const transactions = ref([])
+const listLoading = ref(false)
 
 function formatDateLabel(d) {
   const date = new Date(d)
@@ -32,15 +35,70 @@ function formatDateLabel(d) {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const target = new Date(date.getFullYear(), date.getMonth(), date.getDate())
   const diff = Math.round((today - target) / 86400000)
-  if (diff === 0) return `今天 · ${date.getMonth() + 1}月${date.getDate()}日`
-  if (diff === 1) return `昨天 · ${date.getMonth() + 1}月${date.getDate()}日`
+  if (diff === 0) return '今天'
+  if (diff === 1) return '昨天'
   return `${date.getMonth() + 1}月${date.getDate()}日`
 }
 
-function formatTime(date) {
-  const d = new Date(date)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+function formatDailyExpenseTotal(value) {
+  return Number(value || 0).toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })
 }
+
+function normalizeTransaction(tx) {
+  const categoryName = tx.categoryName || tx.category || '其他'
+  const category = catStore.categories.find((c) => c.name === categoryName && c.type === tx.type)
+  return {
+    ...tx,
+    amount: Number(tx.amount || 0),
+    categoryName,
+    categoryId: tx.categoryId || category?.id || 1,
+    merchant: tx.merchant || '',
+    note: tx.note || '',
+    spentAt: new Date(tx.spentAt),
+  }
+}
+
+const groupedTransactions = computed(() => {
+  const sorted = [...transactions.value].sort(
+    (a, b) => new Date(b.spentAt) - new Date(a.spentAt),
+  )
+  const groups = []
+  let lastKey = null
+
+  sorted.forEach((tx) => {
+    const date = new Date(tx.spentAt)
+    const key = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
+    if (key !== lastKey) {
+      groups.push({ dateKey: key, date, items: [], total: 0 })
+      lastKey = key
+    }
+
+    const group = groups[groups.length - 1]
+    group.items.push(tx)
+    if (tx.type === 'expense') group.total += Number(tx.amount || 0)
+  })
+
+  return groups
+})
+
+async function loadTransactions() {
+  listLoading.value = true
+  try {
+    const { data } = await getTransactions()
+    const normalized = data.map(normalizeTransaction)
+    transactions.value = normalized
+    txStore.setTransactions(normalized)
+  } catch (error) {
+    showToast(error.response?.data?.message || '获取交易记录失败')
+  } finally {
+    listLoading.value = false
+  }
+}
+
+onMounted(loadTransactions)
 
 const lineOption = computed(() => ({
   grid: { left: 16, right: 16, top: 16, bottom: 24 },
@@ -124,10 +182,19 @@ const categoryBars = computed(() => {
         <button class="chip">筛选</button>
       </div>
 
-      <div v-for="group in txStore.groupedByDate" :key="group.dateKey" class="group">
+      <div v-if="listLoading" class="list-state">
+        <van-loading color="#6b6ef5">加载中...</van-loading>
+      </div>
+
+      <van-empty
+        v-else-if="groupedTransactions.length === 0"
+        description="还没有记录,去记一笔吧"
+      />
+
+      <div v-for="group in groupedTransactions" v-else :key="group.dateKey" class="group">
         <div class="date-header">
           <span class="date-label">{{ formatDateLabel(group.date) }}</span>
-          <span class="date-total">支出 ¥{{ group.total }}</span>
+          <span class="date-total">支出 ¥{{ formatDailyExpenseTotal(group.total) }}</span>
         </div>
         <div class="card">
           <div
@@ -137,15 +204,15 @@ const categoryBars = computed(() => {
             :class="{ last: i === group.items.length - 1 }"
             @click="router.push({ name: 'edit-transaction', params: { id: tx.id } })"
           >
-            <div class="tx-icon" :style="{ background: CATEGORY_BG[tx.categoryName] || '#f3f4f6' }">
-              {{ CATEGORY_ICONS[tx.categoryName] || '💳' }}
+            <div class="tx-icon" :style="{ background: getTransactionIconBg(tx) }">
+              {{ getTransactionIcon(tx) }}
             </div>
             <div class="tx-info">
-              <p class="tx-name">{{ tx.merchant }}</p>
-              <p class="tx-meta">{{ tx.categoryName }} · {{ formatTime(tx.spentAt) }}</p>
+              <p class="tx-name">{{ getTransactionTitle(tx) }}</p>
+              <p class="tx-meta">{{ getTransactionMeta(tx) }}</p>
             </div>
             <span :class="['tx-amount', tx.type === 'income' ? 'income' : '']">
-              {{ tx.type === 'income' ? '+' : '-' }}¥{{ tx.amount }}
+              {{ formatTransactionAmount(tx) }}
             </span>
           </div>
         </div>
@@ -274,6 +341,12 @@ const categoryBars = computed(() => {
 
 .group {
   margin-bottom: 16px;
+}
+
+.list-state {
+  display: flex;
+  justify-content: center;
+  padding: 40px 0;
 }
 
 .date-header {

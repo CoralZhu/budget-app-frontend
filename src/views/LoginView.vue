@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { login } from '@/api/auth'
 import { showToast } from 'vant'
 
 const router = useRouter()
@@ -18,10 +19,21 @@ async function handleLogin() {
     return
   }
   loading.value = true
-  await new Promise((r) => setTimeout(r, 800))
-  authStore.login({ username: account.value.split('@')[0] || 'Larpys' }, 'mock-jwt-token')
-  router.replace({ name: 'home' })
-  loading.value = false
+  try {
+    const { data } = await login({
+      account: account.value,
+      password: password.value,
+    })
+
+    localStorage.setItem('token', data.token)
+    authStore.login(data.user, data.token)
+    showToast('登录成功')
+    router.replace('/app/home')
+  } catch (error) {
+    showToast(error.response?.data?.message || '邮箱/昵称或密码错误')
+  } finally {
+    loading.value = false
+  }
 }
 </script>
 
@@ -32,10 +44,10 @@ async function handleLogin() {
     <p class="subtitle">登录账号继续使用智能记账</p>
 
     <div class="form">
-      <p class="field-label">邮箱 / 手机号</p>
+      <p class="field-label">邮箱 / 昵称</p>
       <van-field
         v-model="account"
-        placeholder="1234567890@email.com"
+        placeholder="请输入邮箱或昵称"
         class="field"
         :border="false"
       />

@@ -1,70 +1,152 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { showToast } from 'vant'
 import { use } from 'echarts/core'
 import { PieChart } from 'echarts/charts'
-import { LegendComponent, TooltipComponent } from 'echarts/components'
+import { GraphicComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
+import { getTransactions } from '@/api/transaction'
 import { useAuthStore } from '@/stores/auth'
 import { useTransactionsStore } from '@/stores/transactions'
 import { useBudgetStore } from '@/stores/budget'
+import {
+  formatTransactionAmount,
+  getTransactionIcon,
+  getTransactionIconBg,
+  getTransactionMeta,
+  getTransactionTitle,
+  getTransactionCategory,
+} from '@/utils/transactionDisplay'
 
-use([PieChart, LegendComponent, TooltipComponent, CanvasRenderer])
+use([PieChart, GraphicComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 const router = useRouter()
 const authStore = useAuthStore()
 const txStore = useTransactionsStore()
 const budgetStore = useBudgetStore()
+const previousMonthExpense = ref(0)
 
 const CATEGORY_COLORS = {
-  餐饮: '#6b6ef5',
-  交通: '#8b5cf6',
+  餐饮: '#6E73F2',
+  交通: '#8B7DF7',
   购物: '#f59e0b',
   饮品: '#ec4899',
   教育: '#10b981',
-  娱乐: '#f97316',
-  医疗: '#06b6d4',
-  其他: '#d1d5db',
+  娱乐: '#ef4444',
+  医疗: '#14b8a6',
+  其他: '#94a3b8',
 }
 
-const CATEGORY_ICONS = {
-  餐饮: '🍴',
-  饮品: '☕',
-  交通: '🚇',
-  购物: '🛍️',
-  教育: '📚',
-  娱乐: '🎮',
-  医疗: '💊',
-  工资: '💰',
-  兼职: '💼',
-  其他收入: '🎁',
+function toMonthParam(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  return `${year}-${month}`
 }
 
-function getCategoryBg(name) {
-  const MAP = {
-    餐饮: '#fff3e6',
-    饮品: '#ede9fe',
-    交通: '#dbeafe',
-    购物: '#fce7f3',
-    教育: '#d1fae5',
-    娱乐: '#fef3c7',
-    医疗: '#ccfbf1',
-    工资: '#d1fae5',
+function normalizeTransaction(tx) {
+  return {
+    ...tx,
+    amount: Number(tx.amount || 0),
+    categoryName: tx.categoryName || tx.category || '其他',
+    merchant: tx.merchant || '',
+    note: tx.note || '',
+    spentAt: new Date(tx.spentAt),
   }
-  return MAP[name] || '#f3f4f6'
 }
+
+function sumExpense(items) {
+  return items
+    .filter((tx) => tx.type === 'expense')
+    .reduce((sum, tx) => sum + Number(tx.amount || 0), 0)
+}
+
+const currentMonthExpense = computed(() => sumExpense(txStore.currentMonth))
+
+const monthlyCompare = computed(() => {
+  const previous = previousMonthExpense.value
+  if (previous <= 0) {
+    return { text: '上月无记录', trend: 'neutral' }
+  }
+
+  const diff = currentMonthExpense.value - previous
+  const percent = Math.abs((diff / previous) * 100).toFixed(1)
+
+  if (diff > 0) {
+    return { text: `比上月多 ${percent}%`, trend: 'up' }
+  }
+
+  if (diff < 0) {
+    return { text: `比上月少 ${percent}%`, trend: 'down' }
+  }
+
+  return { text: '与上月持平', trend: 'neutral' }
+})
+
+async function loadMonthlyStats() {
+  const now = new Date()
+  const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+
+  try {
+    const [currentRes, previousRes] = await Promise.all([
+      getTransactions({ month: toMonthParam(now) }),
+      getTransactions({ month: toMonthParam(previousMonth) }),
+    ])
+
+    txStore.setTransactions(currentRes.data.map(normalizeTransaction))
+    previousMonthExpense.value = sumExpense(previousRes.data)
+  } catch (error) {
+    showToast(error.response?.data?.message || '获取月度统计失败')
+  }
+}
+
+onMounted(loadMonthlyStats)
+
+const categoryBreakdown = computed(() => {
+  const totals = {}
+  txStore.currentMonth
+    .filter((tx) => tx.type === 'expense')
+    .forEach((tx) => {
+      const category = getTransactionCategory(tx)
+      totals[category] = (totals[category] || 0) + Number(tx.amount || 0)
+    })
+
+  const total = Object.values(totals).reduce((sum, value) => sum + value, 0)
+  const sorted = Object.entries(totals)
+    .map(([name, value]) => ({
+      name,
+      value,
+      pct: total > 0 ? Math.round((value / total) * 100) : 0,
+      color: CATEGORY_COLORS[name] || CATEGORY_COLORS.其他,
+    }))
+    .sort((a, b) => b.value - a.value)
+
+  const top = sorted.slice(0, 4)
+  const restValue = sorted.slice(4).reduce((sum, item) => sum + item.value, 0)
+  if (restValue > 0) {
+    top.push({
+      name: '其他',
+      value: restValue,
+      pct: Math.round((restValue / total) * 100),
+      color: CATEGORY_COLORS.其他,
+    })
+  }
+
+  return { total, items: top }
+})
+
+const monthlyExpenseText = computed(() =>
+  Math.round(categoryBreakdown.value.total).toLocaleString('zh-CN'),
+)
 
 const pieOption = computed(() => {
-  const totals = txStore.categoryTotals
-  const top3 = totals.slice(0, 3)
-  const otherVal = totals.slice(3).reduce((s, c) => s + c.value, 0)
-  const data = top3.map((c) => ({
+  const data = categoryBreakdown.value.items.map((c) => ({
     name: c.name,
     value: c.value,
-    itemStyle: { color: CATEGORY_COLORS[c.name] || '#6b6ef5' },
+    itemStyle: { color: c.color },
   }))
-  if (otherVal > 0) data.push({ name: '其他', value: otherVal, itemStyle: { color: '#d1d5db' } })
+
   return {
     series: [
       {
@@ -80,42 +162,27 @@ const pieOption = computed(() => {
       {
         type: 'text',
         left: 'center',
-        top: '38%',
-        style: { text: '总计', fill: '#9ca3af', fontSize: 12 },
+        top: '35%',
+        style: { text: '本月', fill: '#9ca3af', fontSize: 12, textAlign: 'center' },
       },
       {
         type: 'text',
         left: 'center',
-        top: '50%',
+        top: '49%',
         style: {
-          text: `¥${Math.round(txStore.monthlyExpense)}`,
+          text: `¥${monthlyExpenseText.value}`,
           fill: '#1a1a2e',
           fontSize: 15,
           fontWeight: 'bold',
+          textAlign: 'center',
         },
       },
     ],
   }
 })
 
-const pieCategories = computed(() => {
-  const totals = txStore.categoryTotals
-  const total = txStore.monthlyExpense
-  return totals.slice(0, 4).map((c) => ({
-    ...c,
-    pct: Math.round((c.value / total) * 100),
-    color: CATEGORY_COLORS[c.name] || '#6b6ef5',
-  }))
-})
+const pieCategories = computed(() => categoryBreakdown.value.items)
 
-function formatTime(date) {
-  const d = new Date(date)
-  const now = new Date()
-  if (d.toDateString() === now.toDateString()) {
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-  }
-  return '昨天'
-}
 </script>
 
 <template>
@@ -132,8 +199,8 @@ function formatTime(date) {
     <!-- Monthly Spend Card -->
     <div class="spend-card">
       <p class="card-label">本月已支出</p>
-      <h1 class="spend-amount">¥ {{ txStore.monthlyExpense.toLocaleString('zh', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</h1>
-      <p class="spend-compare">比上月多 12.5%</p>
+      <h1 class="spend-amount">¥ {{ currentMonthExpense.toLocaleString('zh', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</h1>
+      <p :class="['spend-compare', monthlyCompare.trend]">{{ monthlyCompare.text }}</p>
       <div class="budget-row">
         <span>预算 ¥{{ budgetStore.totalBudget.toLocaleString() }}</span>
         <span class="budget-pct">{{ budgetStore.usagePercent }}%</span>
@@ -176,16 +243,18 @@ function formatTime(date) {
         v-for="tx in txStore.recentFive"
         :key="tx.id"
         class="tx-item"
-        @click="router.push({ name: 'edit-transaction', params: { id: tx.id } })"
+        @click="router.push({ name: 'detail' })"
       >
-        <div class="tx-icon" :style="{ background: getCategoryBg(tx.categoryName) }">
-          {{ CATEGORY_ICONS[tx.categoryName] || '💳' }}
+        <div class="tx-icon" :style="{ background: getTransactionIconBg(tx) }">
+          {{ getTransactionIcon(tx) }}
         </div>
         <div class="tx-info">
-          <p class="tx-name">{{ tx.merchant }}</p>
-          <p class="tx-meta">{{ tx.categoryName }} · {{ formatTime(tx.spentAt) }}</p>
+          <p class="tx-name">{{ getTransactionTitle(tx) }}</p>
+          <p class="tx-meta">{{ getTransactionMeta(tx) }}</p>
         </div>
-        <span class="tx-amount">-¥{{ tx.amount }}</span>
+        <span :class="['tx-amount', tx.type === 'income' ? 'income' : '']">
+          {{ formatTransactionAmount(tx) }}
+        </span>
       </div>
     </div>
   </div>
@@ -241,6 +310,16 @@ function formatTime(date) {
   font-size: 13px;
   opacity: 0.8;
   margin-bottom: 16px;
+}
+
+.spend-compare.up {
+  color: #ffe4e6;
+  opacity: 1;
+}
+
+.spend-compare.down {
+  color: #bbf7d0;
+  opacity: 1;
 }
 
 .budget-row {
@@ -361,5 +440,9 @@ function formatTime(date) {
   font-size: 16px;
   font-weight: 600;
   color: #1a1a2e;
+}
+
+.tx-amount.income {
+  color: #10b981;
 }
 </style>

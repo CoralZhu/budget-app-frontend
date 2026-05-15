@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import { useTransactionsStore } from '@/stores/transactions'
 import { useCategoriesStore } from '@/stores/categories'
+import { createTransaction } from '@/api/transaction'
 
 const router = useRouter()
 const txStore = useTransactionsStore()
@@ -16,19 +17,98 @@ const txType = ref('expense') // 'expense' | 'income'
 // --- Manual mode state ---
 const amountStr = ref('0')
 const selectedCategoryId = ref(1)
-const dateStr = ref(todayStr())
+const spentAt = ref(toLocalDateTimeString(new Date()))
+const showDateTimePicker = ref(false)
+const datePickerValue = ref(getDatePickerValue(new Date()))
+const timePickerValue = ref(getTimePickerValue(new Date()))
+const minDate = new Date(2020, 0, 1)
+const maxDate = new Date(2035, 11, 31)
+const merchant = ref('')
 const note = ref('')
+const manualSaving = ref(false)
+const initialSpentAt = spentAt.value
 
-function todayStr() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+function pad(value) {
+  return String(value).padStart(2, '0')
 }
 
-function formatDisplayDate(s) {
-  const d = new Date(s + 'T00:00:00')
+function toLocalDateTimeString(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:00`
+}
+
+function getDatePickerValue(date) {
+  return [String(date.getFullYear()), pad(date.getMonth() + 1), pad(date.getDate())]
+}
+
+function getTimePickerValue(date) {
+  return [pad(date.getHours()), pad(date.getMinutes())]
+}
+
+function openDateTimePicker() {
+  const date = new Date(spentAt.value)
+  datePickerValue.value = getDatePickerValue(date)
+  timePickerValue.value = getTimePickerValue(date)
+  showDateTimePicker.value = true
+}
+
+function confirmDateTime() {
+  const [year, month, day] = datePickerValue.value.map(Number)
+  const [hour, minute] = timePickerValue.value.map(Number)
+  spentAt.value = toLocalDateTimeString(new Date(year, month - 1, day, hour, minute, 0))
+  showDateTimePicker.value = false
+}
+
+function hasUnsavedContent() {
+  const hasManualContent =
+    amountStr.value !== '0' ||
+    txType.value !== 'expense' ||
+    selectedCategoryId.value !== 1 ||
+    merchant.value.trim() ||
+    note.value.trim() ||
+    spentAt.value !== initialSpentAt
+
+  const hasPhotoContent = photoState.value !== 'idle' || !!photoResult.value
+  const hasVoiceContent =
+    voiceState.value !== 'idle' || !!voiceText.value || !!voiceResult.value || voiceSeconds.value > 0
+
+  return Boolean(hasManualContent || hasPhotoContent || hasVoiceContent)
+}
+
+function goBack() {
+  if (window.history.state?.back) {
+    router.back()
+  } else {
+    router.replace({ name: 'home' })
+  }
+}
+
+async function handleBack() {
+  if (manualSaving.value) return
+
+  if (hasUnsavedContent()) {
+    try {
+      await showConfirmDialog({
+        title: '确认离开?',
+        message: '未保存的内容会丢失,确认离开?',
+        confirmButtonText: '离开',
+        cancelButtonText: '继续编辑',
+      })
+    } catch {
+      return
+    }
+  }
+
+  goBack()
+}
+
+function formatDisplayDate(value) {
+  const d = new Date(value)
   const now = new Date()
-  if (d.toDateString() === now.toDateString()) return `今天 ${d.getMonth() + 1}月${d.getDate()}日`
-  return `${d.getMonth() + 1}月${d.getDate()}日`
+  const dateText =
+    d.toDateString() === now.toDateString()
+      ? `今天 ${d.getMonth() + 1}月${d.getDate()}日`
+      : `${d.getMonth() + 1}月${d.getDate()}日`
+  return `${dateText} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 const expenseCategories = computed(() =>
@@ -41,26 +121,50 @@ const displayCategories = computed(() =>
   txType.value === 'expense' ? expenseCategories.value : incomeCategories.value,
 )
 
-function saveManual() {
+async function saveManual() {
+  if (manualSaving.value) return
+
   const amount = parseFloat(amountStr.value)
   if (!amount || amount <= 0) {
     showToast('请输入金额')
     return
   }
+
   const cat = catStore.getCategoryById(selectedCategoryId.value)
-  txStore.addTransaction({
-    categoryId: selectedCategoryId.value,
-    categoryName: cat?.name || '其他',
-    amount,
+  const payload = {
     type: txType.value,
-    merchant: cat?.name || '记账',
+    amount,
+    category: cat?.name || '其他',
+    merchant: merchant.value,
     note: note.value,
-    spentAt: new Date(dateStr.value + 'T12:00:00'),
+    spentAt: spentAt.value,
     inputMethod: 'manual',
-    aiConfidence: null,
-  })
-  showToast({ message: '保存成功', icon: 'success' })
-  router.replace({ name: 'home' })
+  }
+
+  manualSaving.value = true
+  try {
+    const { data } = await createTransaction(payload)
+
+    txStore.addTransaction({
+      id: data.id,
+      categoryId: selectedCategoryId.value,
+      categoryName: data.category,
+      amount: Number(data.amount),
+      type: data.type,
+      merchant: data.merchant || '',
+      note: data.note || '',
+      spentAt: new Date(data.spentAt),
+      inputMethod: data.inputMethod,
+      aiConfidence: null,
+    })
+
+    showToast({ message: '记账成功', icon: 'success' })
+    router.replace({ name: 'home' })
+  } catch (error) {
+    showToast(error.response?.data?.message || '保存失败，请稍后重试')
+  } finally {
+    manualSaving.value = false
+  }
 }
 
 // --- Photo mode state ---
@@ -163,8 +267,16 @@ onUnmounted(() => clearInterval(voiceTimer))
     <!-- ========== MANUAL MODE ========== -->
     <template v-if="mode === 'manual'">
       <div class="nav-bar">
+        <button class="nav-icon-btn" @click="handleBack">
+          <van-icon name="arrow-left" size="22" />
+        </button>
         <span class="nav-title">记一笔 ✏️</span>
-        <span class="nav-action" @click="saveManual">保存</span>
+        <span
+          :class="['nav-action', { disabled: manualSaving }]"
+          @click="saveManual"
+        >
+          {{ manualSaving ? '保存中...' : '保存' }}
+        </span>
       </div>
 
       <div class="card">
@@ -212,12 +324,20 @@ onUnmounted(() => clearInterval(voiceTimer))
 
       <div class="card info-card">
         <van-field
-          :model-value="formatDisplayDate(dateStr)"
-          label="日期"
+          :model-value="formatDisplayDate(spentAt)"
+          label="日期时间"
           :border="false"
           class="info-field"
           readonly
           is-link
+          @click="openDateTimePicker"
+        />
+        <van-field
+          v-model="merchant"
+          placeholder="商家（选填）"
+          :border="false"
+          class="info-field"
+          clearable
         />
         <van-field
           v-model="note"
@@ -227,12 +347,41 @@ onUnmounted(() => clearInterval(voiceTimer))
           clearable
         />
       </div>
+
+      <van-popup
+        v-model:show="showDateTimePicker"
+        round
+        position="bottom"
+        class="date-time-popup"
+        overlay-class="date-time-overlay"
+      >
+        <van-picker-group
+          title="选择日期时间"
+          :tabs="['日期', '时间']"
+          @confirm="confirmDateTime"
+          @cancel="showDateTimePicker = false"
+        >
+          <van-date-picker
+            v-model="datePickerValue"
+            :min-date="minDate"
+            :max-date="maxDate"
+          />
+          <van-time-picker
+            v-model="timePickerValue"
+            :columns-type="['hour', 'minute']"
+          />
+        </van-picker-group>
+      </van-popup>
     </template>
 
     <!-- ========== PHOTO MODE ========== -->
     <template v-else-if="mode === 'photo'">
-      <div class="nav-bar centered">
+      <div class="nav-bar">
+        <button class="nav-icon-btn" @click="handleBack">
+          <van-icon name="arrow-left" size="22" />
+        </button>
         <span class="nav-title">拍小票自动记账</span>
+        <span class="nav-placeholder"></span>
       </div>
 
       <div class="viewfinder">
@@ -320,8 +469,12 @@ onUnmounted(() => clearInterval(voiceTimer))
     <!-- ========== VOICE MODE ========== -->
     <template v-else>
       <div class="nav-bar">
+        <button class="nav-icon-btn" @click="handleBack">
+          <van-icon name="arrow-left" size="22" />
+        </button>
         <span class="nav-title">语音记账</span>
         <span v-if="voiceResult" class="nav-action" @click="saveVoice">保存</span>
+        <span v-else class="nav-placeholder"></span>
       </div>
 
       <div class="card voice-card">
@@ -432,6 +585,24 @@ onUnmounted(() => clearInterval(voiceTimer))
   justify-content: center;
 }
 
+.nav-icon-btn,
+.nav-placeholder {
+  width: 48px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.nav-icon-btn {
+  border: none;
+  background: transparent;
+  color: #1a1a2e;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+  padding: 0;
+}
+
 .nav-title {
   font-size: 20px;
   font-weight: 700;
@@ -442,6 +613,12 @@ onUnmounted(() => clearInterval(voiceTimer))
   color: #6b6ef5;
   font-weight: 500;
   cursor: pointer;
+}
+
+.nav-action.disabled {
+  color: #9ca3af;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .card {
@@ -576,6 +753,12 @@ onUnmounted(() => clearInterval(voiceTimer))
 
 .info-field:last-child {
   border-bottom: none;
+}
+
+:deep(.date-time-popup),
+:deep(.date-time-overlay) {
+  left: max(0px, calc((100vw - 480px) / 2));
+  width: min(100vw, 480px);
 }
 
 /* Photo viewfinder */

@@ -2,15 +2,28 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 export const useAuthStore = defineStore('auth', () => {
-  const user = ref({
-    id: 1,
-    username: 'Larpys',
-    email: '123456789@example.com',
+  const defaultUser = {
+    id: null,
+    username: '',
+    email: '',
     avatarUrl: null,
     gender: '男',
-    bio: '像风一样',
-  })
-  const token = ref(localStorage.getItem('token') || 'mock-token-for-dev')
+    bio: '',
+  }
+
+  const user = ref({ ...defaultUser })
+  const token = ref(null)
+
+  function initAuth() {
+    token.value = localStorage.getItem('token')
+
+    const storedUser = localStorage.getItem('user')
+    if (storedUser) {
+      user.value = { ...defaultUser, ...JSON.parse(storedUser) }
+    }
+  }
+
+  initAuth()
 
   const isLoggedIn = computed(() => !!token.value)
 
@@ -24,19 +37,23 @@ export const useAuthStore = defineStore('auth', () => {
   })
 
   function login(userData, authToken) {
-    user.value = { ...user.value, ...userData }
+    user.value = { ...defaultUser, ...userData }
     token.value = authToken
     localStorage.setItem('token', authToken)
+    localStorage.setItem('user', JSON.stringify(userData))
   }
 
   function logout() {
+    user.value = { ...defaultUser }
     token.value = null
     localStorage.removeItem('token')
+    localStorage.removeItem('user')
   }
 
   function updateUser(updates) {
-    Object.assign(user.value, updates)
+    user.value = { ...user.value, ...updates }
+    localStorage.setItem('user', JSON.stringify(user.value))
   }
 
-  return { user, token, isLoggedIn, greeting, login, logout, updateUser }
+  return { user, token, isLoggedIn, greeting, initAuth, login, logout, updateUser }
 })

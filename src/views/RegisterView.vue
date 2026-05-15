@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { register, sendCode as sendVerificationCode } from '@/api/auth'
 import { showToast } from 'vant'
 
 const router = useRouter()
@@ -11,22 +12,32 @@ const code = ref('')
 const password = ref('')
 const agreed = ref(false)
 const loading = ref(false)
+const codeLoading = ref(false)
 const countdown = ref(0)
 
 let timer = null
 
-function sendCode() {
+async function sendCode() {
   if (!email.value) {
     showToast('请输入邮箱')
     return
   }
   if (countdown.value > 0) return
-  showToast('验证码已发送')
-  countdown.value = 60
-  timer = setInterval(() => {
-    countdown.value--
-    if (countdown.value <= 0) clearInterval(timer)
-  }, 1000)
+
+  codeLoading.value = true
+  try {
+    await sendVerificationCode({ email: email.value })
+    showToast('验证码已发送')
+    countdown.value = 60
+    timer = setInterval(() => {
+      countdown.value--
+      if (countdown.value <= 0) clearInterval(timer)
+    }, 1000)
+  } catch (error) {
+    showToast(error.response?.data?.message || '验证码发送失败')
+  } finally {
+    codeLoading.value = false
+  }
 }
 
 async function handleRegister() {
@@ -39,9 +50,21 @@ async function handleRegister() {
     return
   }
   loading.value = true
-  await new Promise((r) => setTimeout(r, 800))
-  router.replace({ name: 'home' })
-  loading.value = false
+  try {
+    await register({
+      username: nickname.value,
+      email: email.value,
+      password: password.value,
+      code: code.value,
+    })
+
+    showToast('注册成功，请登录')
+    router.replace({ name: 'login' })
+  } catch (error) {
+    showToast(error.response?.data?.message || '注册失败，请稍后重试')
+  } finally {
+    loading.value = false
+  }
 }
 </script>
 
@@ -74,6 +97,7 @@ async function handleRegister() {
         <van-button
           class="code-btn"
           :disabled="countdown > 0"
+          :loading="codeLoading"
           @click="sendCode"
         >
           {{ countdown > 0 ? `${countdown}s` : '获取验证码' }}
@@ -110,7 +134,7 @@ async function handleRegister() {
         class="reg-btn"
         @click="handleRegister"
       >
-        注册并登录
+        注册
       </van-button>
 
       <p class="login-hint">

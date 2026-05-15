@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
+import { updateTransaction } from '@/api/transaction'
 import { useTransactionsStore } from '@/stores/transactions'
 import { useCategoriesStore } from '@/stores/categories'
 
@@ -16,7 +17,43 @@ const amountStr = ref('')
 const selectedCategoryId = ref(1)
 const merchant = ref('')
 const noteVal = ref('')
-const dateStr = ref('')
+const spentAt = ref('')
+const showDateTimePicker = ref(false)
+const datePickerValue = ref(getDatePickerValue(new Date()))
+const timePickerValue = ref(getTimePickerValue(new Date()))
+const minDate = new Date(2020, 0, 1)
+const maxDate = new Date(2035, 11, 31)
+const saving = ref(false)
+
+function pad(value) {
+  return String(value).padStart(2, '0')
+}
+
+function toLocalDateTimeString(date) {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:00`
+}
+
+function getDatePickerValue(date) {
+  return [String(date.getFullYear()), pad(date.getMonth() + 1), pad(date.getDate())]
+}
+
+function getTimePickerValue(date) {
+  return [pad(date.getHours()), pad(date.getMinutes())]
+}
+
+function openDateTimePicker() {
+  const date = new Date(spentAt.value)
+  datePickerValue.value = getDatePickerValue(date)
+  timePickerValue.value = getTimePickerValue(date)
+  showDateTimePicker.value = true
+}
+
+function confirmDateTime() {
+  const [year, month, day] = datePickerValue.value.map(Number)
+  const [hour, minute] = timePickerValue.value.map(Number)
+  spentAt.value = toLocalDateTimeString(new Date(year, month - 1, day, hour, minute, 0))
+  showDateTimePicker.value = false
+}
 
 onMounted(() => {
   const id = parseInt(route.params.id)
@@ -32,37 +69,76 @@ onMounted(() => {
   merchant.value = found.merchant || ''
   noteVal.value = found.note || ''
   const d = new Date(found.spentAt)
-  dateStr.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  spentAt.value = toLocalDateTimeString(d)
+  datePickerValue.value = getDatePickerValue(d)
+  timePickerValue.value = getTimePickerValue(d)
 })
 
 const displayCategories = computed(() =>
   catStore.categories.filter((c) => c.type === txType.value).slice(0, 8),
 )
 
+function selectType(type) {
+  txType.value = type
+}
+
+watch(txType, (type) => {
+  const selectedCategory = catStore.getCategoryById(selectedCategoryId.value)
+  if (selectedCategory?.type === type) return
+
+  selectedCategoryId.value = displayCategories.value[0]?.id || selectedCategoryId.value
+})
+
 function formatDateTime(date) {
   if (!date) return ''
   const d = new Date(date)
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours() < 12 ? '上午' : '下午'} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours() < 12 ? '上午' : '下午'} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function save() {
+async function save() {
+  if (saving.value) return
+
   const amount = parseFloat(amountStr.value)
   if (!amount || amount <= 0) {
     showToast('请输入金额')
     return
   }
+
   const cat = catStore.getCategoryById(selectedCategoryId.value)
-  txStore.updateTransaction(tx.value.id, {
+  const payload = {
     type: txType.value,
     amount,
-    categoryId: selectedCategoryId.value,
-    categoryName: cat?.name || tx.value.categoryName,
+    category: cat?.name || tx.value.categoryName,
     merchant: merchant.value,
     note: noteVal.value,
-    spentAt: new Date(dateStr.value + 'T12:00:00'),
-  })
-  showToast({ message: '已保存', icon: 'success' })
-  router.back()
+    spentAt: spentAt.value,
+    inputMethod: tx.value.inputMethod || 'manual',
+  }
+
+  saving.value = true
+  try {
+    const { data } = await updateTransaction(tx.value.id, payload)
+
+    txStore.updateTransaction(tx.value.id, {
+      id: data.id,
+      type: data.type,
+      amount: Number(data.amount),
+      categoryId: selectedCategoryId.value,
+      categoryName: data.category,
+      merchant: data.merchant || '',
+      note: data.note || '',
+      spentAt: new Date(data.spentAt),
+      inputMethod: data.inputMethod,
+      createdAt: data.createdAt,
+    })
+
+    showToast({ message: '已保存', icon: 'success' })
+    router.back()
+  } catch (error) {
+    showToast(error.response?.data?.message || '保存失败，请稍后重试')
+  } finally {
+    saving.value = false
+  }
 }
 
 async function deleteTx() {
@@ -78,15 +154,17 @@ async function deleteTx() {
     <div class="nav-bar">
       <van-icon name="arrow-left" size="22" @click="router.back()" />
       <span class="nav-title">编辑记录</span>
-      <span class="nav-action" @click="save">保存</span>
+      <span :class="['nav-action', { disabled: saving }]" @click="save">
+        {{ saving ? '保存中...' : '保存' }}
+      </span>
     </div>
 
     <div class="card">
       <div class="type-toggle">
-        <button :class="['type-btn', { active: txType === 'expense' }]" @click="txType = 'expense'">
+        <button :class="['type-btn', { active: txType === 'expense' }]" @click="selectType('expense')">
           支出
         </button>
-        <button :class="['type-btn income', { active: txType === 'income' }]" @click="txType = 'income'">
+        <button :class="['type-btn income', { active: txType === 'income' }]" @click="selectType('income')">
           收入
         </button>
       </div>
@@ -95,6 +173,34 @@ async function deleteTx() {
         <span class="currency">¥</span>
         <input v-model="amountStr" type="number" class="amount-input" inputmode="decimal" />
       </div>
+    </div>
+
+    <div class="card info-card">
+      <van-field
+        v-model="merchant"
+        label="商家"
+        placeholder="商家名称"
+        :border="false"
+        class="info-field"
+        clearable
+      />
+      <van-field
+        :model-value="formatDateTime(spentAt)"
+        label="日期时间"
+        :border="false"
+        class="info-field"
+        readonly
+        is-link
+        @click="openDateTimePicker"
+      />
+      <van-field
+        v-model="noteVal"
+        label="备注"
+        placeholder="添加备注"
+        :border="false"
+        class="info-field"
+        clearable
+      />
     </div>
 
     <div class="card">
@@ -113,27 +219,30 @@ async function deleteTx() {
       </div>
     </div>
 
-    <div class="card info-card">
-      <van-field
-        v-model="merchant"
-        :label="merchant || '商家名称'"
-        :border="false"
-        class="info-field"
-      />
-      <van-field
-        :model-value="formatDateTime(tx.spentAt)"
-        :label="formatDateTime(tx.spentAt)"
-        :border="false"
-        class="info-field"
-        readonly
-      />
-      <van-field
-        v-model="noteVal"
-        :placeholder="noteVal || '添加备注'"
-        :border="false"
-        class="info-field"
-      />
-    </div>
+    <van-popup
+      v-model:show="showDateTimePicker"
+      round
+      position="bottom"
+      class="date-time-popup"
+      overlay-class="date-time-overlay"
+    >
+      <van-picker-group
+        title="选择日期时间"
+        :tabs="['日期', '时间']"
+        @confirm="confirmDateTime"
+        @cancel="showDateTimePicker = false"
+      >
+        <van-date-picker
+          v-model="datePickerValue"
+          :min-date="minDate"
+          :max-date="maxDate"
+        />
+        <van-time-picker
+          v-model="timePickerValue"
+          :columns-type="['hour', 'minute']"
+        />
+      </van-picker-group>
+    </van-popup>
 
     <!-- Original receipt -->
     <div v-if="tx.inputMethod === 'photo' || tx.inputMethod === 'voice'" class="card">
@@ -185,6 +294,12 @@ async function deleteTx() {
   color: #6b6ef5;
   font-weight: 500;
   cursor: pointer;
+}
+
+.nav-action.disabled {
+  color: #9ca3af;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .card {
@@ -310,6 +425,12 @@ async function deleteTx() {
 
 .info-field:last-child {
   border-bottom: none;
+}
+
+:deep(.date-time-popup),
+:deep(.date-time-overlay) {
+  left: max(0px, calc((100vw - 480px) / 2));
+  width: min(100vw, 480px);
 }
 
 .receipt-row {

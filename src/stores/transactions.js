@@ -77,12 +77,20 @@ export const useTransactionsStore = defineStore('transactions', () => {
   })
 
   function addTransaction(tx) {
-    transactions.value.unshift({ ...tx, id: nextId.value++ })
+    const id = tx.id ?? nextId.value++
+    if (id >= nextId.value) nextId.value = id + 1
+    transactions.value.unshift({ ...tx, id })
   }
 
   function updateTransaction(id, updates) {
     const idx = transactions.value.findIndex((t) => t.id === id)
     if (idx > -1) Object.assign(transactions.value[idx], updates)
+  }
+
+  function setTransactions(items) {
+    transactions.value = [...items]
+    const maxId = transactions.value.reduce((max, t) => Math.max(max, Number(t.id) || 0), 0)
+    nextId.value = maxId + 1
   }
 
   function deleteTransaction(id) {
@@ -103,6 +111,7 @@ export const useTransactionsStore = defineStore('transactions', () => {
     groupedByDate,
     addTransaction,
     updateTransaction,
+    setTransactions,
     deleteTransaction,
     getById,
   }
