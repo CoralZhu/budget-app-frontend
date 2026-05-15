@@ -7,10 +7,11 @@ import { PieChart } from 'echarts/charts'
 import { GraphicComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
+import { getBudgets } from '@/api/budget'
 import { getTransactions } from '@/api/transaction'
 import { useAuthStore } from '@/stores/auth'
 import { useTransactionsStore } from '@/stores/transactions'
-import { useBudgetStore } from '@/stores/budget'
+import { getCurrentYearMonth } from '@/utils/date'
 import {
   formatTransactionAmount,
   getTransactionIcon,
@@ -25,8 +26,8 @@ use([PieChart, GraphicComponent, LegendComponent, TooltipComponent, CanvasRender
 const router = useRouter()
 const authStore = useAuthStore()
 const txStore = useTransactionsStore()
-const budgetStore = useBudgetStore()
 const previousMonthExpense = ref(0)
+const monthlyBudget = ref(null)
 
 const CATEGORY_COLORS = {
   餐饮: '#6E73F2',
@@ -40,9 +41,7 @@ const CATEGORY_COLORS = {
 }
 
 function toMonthParam(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  return `${year}-${month}`
+  return getCurrentYearMonth(date)
 }
 
 function normalizeTransaction(tx) {
@@ -56,6 +55,15 @@ function normalizeTransaction(tx) {
   }
 }
 
+function unwrapList(response) {
+  const data = response.data
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.data)) return data.data
+  if (Array.isArray(data?.transactions)) return data.transactions
+  if (Array.isArray(data?.budgets)) return data.budgets
+  return []
+}
+
 function sumExpense(items) {
   return items
     .filter((tx) => tx.type === 'expense')
@@ -63,6 +71,15 @@ function sumExpense(items) {
 }
 
 const currentMonthExpense = computed(() => sumExpense(txStore.currentMonth))
+
+const monthlyBudgetAmount = computed(() => Number(monthlyBudget.value?.amount || 0))
+
+const budgetUsagePercent = computed(() => {
+  if (monthlyBudgetAmount.value <= 0) return 0
+  return Math.round((currentMonthExpense.value / monthlyBudgetAmount.value) * 100)
+})
+
+const budgetProgressPercent = computed(() => Math.min(budgetUsagePercent.value, 100))
 
 const monthlyCompare = computed(() => {
   const previous = previousMonthExpense.value
@@ -89,13 +106,16 @@ async function loadMonthlyStats() {
   const previousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
 
   try {
-    const [currentRes, previousRes] = await Promise.all([
+    const [currentRes, previousRes, budgetRes] = await Promise.all([
       getTransactions({ month: toMonthParam(now) }),
       getTransactions({ month: toMonthParam(previousMonth) }),
+      getBudgets(toMonthParam(now)),
     ])
 
-    txStore.setTransactions(currentRes.data.map(normalizeTransaction))
-    previousMonthExpense.value = sumExpense(previousRes.data)
+    txStore.setTransactions(unwrapList(currentRes).map(normalizeTransaction))
+    previousMonthExpense.value = sumExpense(unwrapList(previousRes))
+    const budgetList = unwrapList(budgetRes)
+    monthlyBudget.value = budgetList.find((budget) => !budget.category) || null
   } catch (error) {
     showToast(error.response?.data?.message || '获取月度统计失败')
   }
@@ -201,12 +221,15 @@ const pieCategories = computed(() => categoryBreakdown.value.items)
       <p class="card-label">本月已支出</p>
       <h1 class="spend-amount">¥ {{ currentMonthExpense.toLocaleString('zh', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</h1>
       <p :class="['spend-compare', monthlyCompare.trend]">{{ monthlyCompare.text }}</p>
-      <div class="budget-row">
-        <span>预算 ¥{{ budgetStore.totalBudget.toLocaleString() }}</span>
-        <span class="budget-pct">{{ budgetStore.usagePercent }}%</span>
+      <div v-if="monthlyBudget" class="budget-row">
+        <span>预算 ¥{{ monthlyBudgetAmount.toFixed(0) }}</span>
+        <span class="budget-pct">{{ budgetUsagePercent }}%</span>
+      </div>
+      <div v-else class="budget-row unset" @click="router.push({ name: 'budget' })">
+        <span>还未设置预算，点击设置 →</span>
       </div>
       <van-progress
-        :percentage="budgetStore.usagePercent"
+        :percentage="budgetProgressPercent"
         :show-pivot="false"
         stroke-width="8"
         color="white"
@@ -327,6 +350,10 @@ const pieCategories = computed(() => categoryBreakdown.value.items)
   justify-content: space-between;
   font-size: 13px;
   margin-bottom: 6px;
+}
+
+.budget-row.unset {
+  cursor: pointer;
 }
 
 .budget-pct {

@@ -24,6 +24,7 @@ export const useCategoriesStore = defineStore('categories', () => {
   function addCategory(cat) {
     const newCat = { ...cat, id: Date.now(), isDefault: false }
     categories.value.push(newCat)
+    return newCat
   }
 
   function removeCategory(id) {

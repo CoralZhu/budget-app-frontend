@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import { useTransactionsStore } from '@/stores/transactions'
@@ -27,6 +27,9 @@ const merchant = ref('')
 const note = ref('')
 const manualSaving = ref(false)
 const initialSpentAt = spentAt.value
+const showCreateCategory = ref(false)
+const newCategoryName = ref('')
+const newCategoryIcon = ref('')
 
 function pad(value) {
   return String(value).padStart(2, '0')
@@ -112,7 +115,7 @@ function formatDisplayDate(value) {
 }
 
 const expenseCategories = computed(() =>
-  catStore.categories.filter((c) => c.type === 'expense').slice(0, 8),
+  catStore.categories.filter((c) => c.type === 'expense'),
 )
 const incomeCategories = computed(() =>
   catStore.categories.filter((c) => c.type === 'income'),
@@ -120,6 +123,47 @@ const incomeCategories = computed(() =>
 const displayCategories = computed(() =>
   txType.value === 'expense' ? expenseCategories.value : incomeCategories.value,
 )
+
+watch(txType, () => {
+  const first = displayCategories.value[0]
+  if (first && !displayCategories.value.some((cat) => cat.id === selectedCategoryId.value)) {
+    selectedCategoryId.value = first.id
+  }
+})
+
+function openCreateCategory() {
+  newCategoryName.value = ''
+  newCategoryIcon.value = ''
+  showCreateCategory.value = true
+}
+
+function createCategory() {
+  const name = newCategoryName.value.trim()
+  if (!name) {
+    showToast('请输入分类名称')
+    return
+  }
+
+  const exists = catStore.categories.some(
+    (cat) => cat.type === txType.value && cat.name === name,
+  )
+  if (exists) {
+    showToast('这个分类已存在')
+    return
+  }
+
+  const created = catStore.addCategory({
+    name,
+    icon: newCategoryIcon.value.trim() || (txType.value === 'income' ? '💰' : '📌'),
+    bg: txType.value === 'income' ? '#d1fae5' : '#eaebfe',
+    color: txType.value === 'income' ? '#059669' : '#6b6ef5',
+    type: txType.value,
+  })
+
+  selectedCategoryId.value = created.id
+  showCreateCategory.value = false
+  showToast({ message: '分类已创建', icon: 'success' })
+}
 
 async function saveManual() {
   if (manualSaving.value) return
@@ -315,9 +359,37 @@ onUnmounted(() => clearInterval(voiceTimer))
               {{ cat.name }}
             </span>
           </div>
-          <div class="cat-item">
+          <div class="cat-item" @click="openCreateCategory">
             <div class="cat-icon" style="background: #f3f4f6">···</div>
             <span class="cat-name">更多</span>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="showCreateCategory" class="page-layer center">
+        <div class="page-layer-mask" @click="showCreateCategory = false"></div>
+        <div class="category-dialog">
+          <p class="category-dialog-title">新建分类</p>
+          <van-field
+            v-model="newCategoryName"
+            label="名称"
+            placeholder="例如: 早餐"
+            clearable
+          />
+          <van-field
+            v-model="newCategoryIcon"
+            label="图标"
+            placeholder="例如: 🥐"
+            maxlength="2"
+            clearable
+          />
+          <div class="category-dialog-actions">
+            <button type="button" class="dialog-cancel" @click="showCreateCategory = false">
+              取消
+            </button>
+            <button type="button" class="dialog-confirm" @click="createCategory">
+              创建
+            </button>
           </div>
         </div>
       </div>
@@ -572,6 +644,7 @@ onUnmounted(() => clearInterval(voiceTimer))
   padding-bottom: 80px;
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .nav-bar {
@@ -738,6 +811,68 @@ onUnmounted(() => clearInterval(voiceTimer))
 .cat-name.active-text {
   color: #6b6ef5;
   font-weight: 500;
+}
+
+.page-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+}
+
+.page-layer.center {
+  align-items: center;
+  padding: 0 20px;
+}
+
+.page-layer-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.category-dialog {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  background: #fff;
+  border-radius: 20px;
+  padding: 18px 18px 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.category-dialog-title {
+  text-align: center;
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+.category-dialog-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.dialog-cancel,
+.dialog-confirm {
+  height: 42px;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.dialog-cancel {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.dialog-confirm {
+  background: #6b6ef5;
+  color: #fff;
 }
 
 /* Info fields */
