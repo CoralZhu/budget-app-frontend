@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import { useTransactionsStore } from '@/stores/transactions'
@@ -30,6 +30,7 @@ const initialSpentAt = spentAt.value
 const showCreateCategory = ref(false)
 const newCategoryName = ref('')
 const newCategoryIcon = ref('')
+const showAllCategories = ref(false)
 
 function pad(value) {
   return String(value).padStart(2, '0')
@@ -123,8 +124,26 @@ const incomeCategories = computed(() =>
 const displayCategories = computed(() =>
   txType.value === 'expense' ? expenseCategories.value : incomeCategories.value,
 )
+const visibleCategories = computed(() =>
+  showAllCategories.value ? displayCategories.value : displayCategories.value.slice(0, 8),
+)
+const hasMoreCategories = computed(() => displayCategories.value.length > 8)
+
+async function loadCategories() {
+  try {
+    await catStore.fetchCategories(txType.value)
+    const first = displayCategories.value[0]
+    if (first && !displayCategories.value.some((cat) => cat.id === selectedCategoryId.value)) {
+      selectedCategoryId.value = first.id
+    }
+  } catch (error) {
+    showToast(error.response?.data?.message || '获取分类失败')
+  }
+}
 
 watch(txType, () => {
+  showAllCategories.value = false
+  loadCategories()
   const first = displayCategories.value[0]
   if (first && !displayCategories.value.some((cat) => cat.id === selectedCategoryId.value)) {
     selectedCategoryId.value = first.id
@@ -164,6 +183,8 @@ function createCategory() {
   showCreateCategory.value = false
   showToast({ message: '分类已创建', icon: 'success' })
 }
+
+onMounted(loadCategories)
 
 async function saveManual() {
   if (manualSaving.value) return
@@ -349,7 +370,7 @@ onUnmounted(() => clearInterval(voiceTimer))
         <p class="field-label">选择分类</p>
         <div class="cat-grid">
           <div
-            v-for="cat in displayCategories"
+            v-for="cat in visibleCategories"
             :key="cat.id"
             :class="['cat-item', { selected: selectedCategoryId === cat.id }]"
             @click="selectedCategoryId = cat.id"
@@ -359,9 +380,13 @@ onUnmounted(() => clearInterval(voiceTimer))
               {{ cat.name }}
             </span>
           </div>
-          <div class="cat-item" @click="openCreateCategory">
+          <div
+            v-if="hasMoreCategories"
+            class="cat-item"
+            @click="showAllCategories = !showAllCategories"
+          >
             <div class="cat-icon" style="background: #f3f4f6">···</div>
-            <span class="cat-name">更多</span>
+            <span class="cat-name">{{ showAllCategories ? '收起' : '更多' }}</span>
           </div>
         </div>
       </div>

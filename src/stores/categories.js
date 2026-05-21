@@ -1,5 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import {
+  createCategory as createCategoryApi,
+  deleteCategory as deleteCategoryApi,
+  getCategories,
+} from '@/api/category'
 
 export const useCategoriesStore = defineStore('categories', () => {
   const categories = ref([
@@ -17,14 +22,51 @@ export const useCategoriesStore = defineStore('categories', () => {
     { id: 12, name: '其他收入', icon: '🎁', bg: '#fef3c7', color: '#d97706', isDefault: true, type: 'income' },
   ])
 
+  function normalizeCategory(cat) {
+    const color = cat.color || '#6b6ef5'
+    return {
+      ...cat,
+      icon: cat.icon || '📌',
+      color,
+      bg: cat.bg || `${color}22`,
+      isDefault: Boolean(cat.isDefault),
+    }
+  }
+
+  function setCategories(items) {
+    categories.value = items.map(normalizeCategory)
+  }
+
+  async function fetchCategories(type) {
+    const { data } = await getCategories(type)
+    const list = Array.isArray(data) ? data : data?.data || data?.categories || []
+    if (type) {
+      const normalized = list.map(normalizeCategory)
+      categories.value = [
+        ...categories.value.filter((cat) => cat.type !== type),
+        ...normalized,
+      ]
+    } else {
+      setCategories(list)
+    }
+    return categories.value
+  }
+
   function getCategoryById(id) {
     return categories.value.find((c) => c.id === id)
   }
 
   function addCategory(cat) {
-    const newCat = { ...cat, id: Date.now(), isDefault: false }
+    const newCat = normalizeCategory({ ...cat, id: Date.now(), isDefault: false })
     categories.value.push(newCat)
     return newCat
+  }
+
+  async function createCategory(cat) {
+    const { data } = await createCategoryApi(cat)
+    const created = normalizeCategory(data)
+    categories.value.push(created)
+    return created
   }
 
   function removeCategory(id) {
@@ -32,5 +74,20 @@ export const useCategoriesStore = defineStore('categories', () => {
     if (idx > -1) categories.value.splice(idx, 1)
   }
 
-  return { categories, getCategoryById, addCategory, removeCategory }
+  async function deleteCategory(id) {
+    const { data } = await deleteCategoryApi(id)
+    removeCategory(id)
+    return data
+  }
+
+  return {
+    categories,
+    setCategories,
+    fetchCategories,
+    getCategoryById,
+    addCategory,
+    createCategory,
+    removeCategory,
+    deleteCategory,
+  }
 })
