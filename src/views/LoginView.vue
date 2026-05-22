@@ -14,14 +14,16 @@ const remember = ref(false)
 const loading = ref(false)
 
 async function handleLogin() {
-  if (!account.value || !password.value) {
+  const normalizedAccount = account.value.trim()
+
+  if (!normalizedAccount || !password.value) {
     showToast('请填写账号和密码')
     return
   }
   loading.value = true
   try {
     const { data } = await login({
-      account: account.value,
+      account: normalizedAccount,
       password: password.value,
     })
 
@@ -30,7 +32,13 @@ async function handleLogin() {
     showToast('登录成功')
     router.replace('/app/home')
   } catch (error) {
-    showToast(error.response?.data?.message || '邮箱/昵称或密码错误')
+    if (!error.response) {
+      showToast('无法连接服务器，请确认后端已启动')
+    } else if (error.response.status >= 500) {
+      showToast('服务器异常，请稍后重试')
+    } else {
+      showToast(error.response?.data?.message || '邮箱/昵称或密码错误')
+    }
   } finally {
     loading.value = false
   }
