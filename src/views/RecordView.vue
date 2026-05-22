@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { showToast, showConfirmDialog } from 'vant'
 import { useTransactionsStore } from '@/stores/transactions'
 import { useCategoriesStore } from '@/stores/categories'
+import { parseVoice } from '@/api/ai'
+import { recognizeReceipt } from '@/api/ocr'
 import { createTransaction } from '@/api/transaction'
 
 const router = useRouter()
@@ -113,6 +115,19 @@ function formatDisplayDate(value) {
       ? `今天 ${d.getMonth() + 1}月${d.getDate()}日`
       : `${d.getMonth() + 1}月${d.getDate()}日`
   return `${dateText} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function formatReceiptDate(date) {
+  const d = date instanceof Date ? date : new Date(date)
+  if (Number.isNaN(d.getTime())) return ''
+
+  const now = new Date()
+  const timeText = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  if (d.toDateString() === now.toDateString()) {
+    return `今天 ${timeText}`
+  }
+
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${timeText}`
 }
 
 const expenseCategories = computed(() =>
@@ -235,96 +250,525 @@ async function saveManual() {
 // --- Photo mode state ---
 const photoState = ref('idle') // 'idle' | 'capturing' | 'recognizing' | 'done'
 const photoResult = ref(null)
+const editablePhotoResult = ref(null)
+const photoSaving = ref(false)
+const uploadedImage = ref('')
 const fileInput = ref(null)
+const cameraInput = ref(null)
+const showPhotoMerchantEditor = ref(false)
+const showPhotoAmountEditor = ref(false)
+const showPhotoCategoryPicker = ref(false)
+const showPhotoDateTimePicker = ref(false)
+const photoMerchantDraft = ref('')
+const photoAmountDraft = ref('')
+const photoDatePickerValue = ref(getDatePickerValue(new Date()))
+const photoTimePickerValue = ref(getTimePickerValue(new Date()))
 
 function triggerCapture() {
-  photoState.value = 'recognizing'
-  setTimeout(() => {
-    photoResult.value = {
-      merchant: '星巴克',
-      amount: '37.00',
-      category: '饮品',
-      time: '今天 08:20',
-    }
-    photoState.value = 'done'
-  }, 2000)
+  cameraInput.value?.click()
 }
 
 function openGallery() {
   fileInput.value?.click()
 }
 
-function retryPhoto() {
-  photoState.value = 'idle'
-  photoResult.value = null
+function clearUploadedImage() {
+  if (uploadedImage.value) {
+    URL.revokeObjectURL(uploadedImage.value)
+    uploadedImage.value = ''
+  }
 }
 
-function savePhoto() {
-  if (!photoResult.value) return
-  txStore.addTransaction({
-    categoryId: 2,
-    categoryName: photoResult.value.category,
-    amount: parseFloat(photoResult.value.amount),
+function normalizeReceiptResult(data) {
+  const spentAtDate = data?.spentAt ? new Date(data.spentAt) : new Date()
+  const normalizedDate = Number.isNaN(spentAtDate.getTime()) ? new Date() : spentAtDate
+  const amount = Number(data?.amount) || 0
+  const confidence = Number(data?.confidence) || 0
+  const category = data?.category || '其他'
+  const categoryItem =
+    expenseCategories.value.find((cat) => cat.name === category) ||
+    expenseCategories.value.find((cat) => cat.name === '其他') ||
+    expenseCategories.value[0]
+
+  return {
+    merchant: data?.merchant || '未知商家',
+    amount: amount.toFixed(2),
+    amountValue: amount,
+    category,
+    categoryId: categoryItem?.id || null,
+    spentAt: normalizedDate,
+    spentAtValue: toLocalDateTimeString(normalizedDate),
+    time: formatReceiptDate(normalizedDate),
+    confidence,
+  }
+}
+
+function syncEditablePhotoResult(result) {
+  editablePhotoResult.value = result ? { ...result } : null
+}
+
+async function handlePhotoSelected(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file || photoState.value === 'recognizing') return
+
+  clearUploadedImage()
+  uploadedImage.value = URL.createObjectURL(file)
+  photoResult.value = null
+  photoState.value = 'recognizing'
+
+  try {
+    const data = await recognizeReceipt(file)
+    photoResult.value = normalizeReceiptResult(data)
+    syncEditablePhotoResult(photoResult.value)
+    photoState.value = 'done'
+  } catch (error) {
+    photoState.value = 'idle'
+    photoResult.value = null
+    syncEditablePhotoResult(null)
+    clearUploadedImage()
+    showToast(error.response?.data?.message || 'AI 识别失败,请手动记账')
+    mode.value = 'manual'
+  }
+}
+
+function retryPhoto() {
+  if (photoState.value === 'recognizing') return
+  photoState.value = 'idle'
+  photoResult.value = null
+  syncEditablePhotoResult(null)
+  showPhotoMerchantEditor.value = false
+  showPhotoAmountEditor.value = false
+  showPhotoCategoryPicker.value = false
+  showPhotoDateTimePicker.value = false
+  clearUploadedImage()
+}
+
+function openPhotoMerchantEditor() {
+  if (!editablePhotoResult.value) return
+  photoMerchantDraft.value = editablePhotoResult.value.merchant || ''
+  showPhotoMerchantEditor.value = true
+}
+
+function confirmPhotoMerchant() {
+  if (!editablePhotoResult.value) return
+  editablePhotoResult.value.merchant = photoMerchantDraft.value.trim()
+  showPhotoMerchantEditor.value = false
+}
+
+function openPhotoAmountEditor() {
+  if (!editablePhotoResult.value) return
+  photoAmountDraft.value = String(editablePhotoResult.value.amount || '')
+  showPhotoAmountEditor.value = true
+}
+
+function confirmPhotoAmount() {
+  if (!editablePhotoResult.value) return
+
+  const amount = Number(photoAmountDraft.value)
+  if (!amount || amount <= 0) {
+    showToast('请输入有效金额')
+    return
+  }
+
+  editablePhotoResult.value.amountValue = amount
+  editablePhotoResult.value.amount = amount.toFixed(2)
+  showPhotoAmountEditor.value = false
+}
+
+async function openPhotoCategoryPicker() {
+  if (!editablePhotoResult.value) return
+  try {
+    await catStore.fetchCategories('expense')
+  } catch (error) {
+    showToast(error.response?.data?.message || '获取分类失败')
+  }
+  showPhotoCategoryPicker.value = true
+}
+
+function selectPhotoCategory(category) {
+  if (!editablePhotoResult.value) return
+  editablePhotoResult.value.category = category.name
+  editablePhotoResult.value.categoryId = category.id
+  showPhotoCategoryPicker.value = false
+}
+
+function openPhotoDateTimePicker() {
+  if (!editablePhotoResult.value) return
+  const date = new Date(editablePhotoResult.value.spentAtValue)
+  const normalizedDate = Number.isNaN(date.getTime()) ? new Date() : date
+  photoDatePickerValue.value = getDatePickerValue(normalizedDate)
+  photoTimePickerValue.value = getTimePickerValue(normalizedDate)
+  showPhotoDateTimePicker.value = true
+}
+
+function confirmPhotoDateTime() {
+  if (!editablePhotoResult.value) return
+  const [year, month, day] = photoDatePickerValue.value.map(Number)
+  const [hour, minute] = photoTimePickerValue.value.map(Number)
+  const date = new Date(year, month - 1, day, hour, minute, 0)
+  editablePhotoResult.value.spentAt = date
+  editablePhotoResult.value.spentAtValue = toLocalDateTimeString(date)
+  editablePhotoResult.value.time = formatReceiptDate(date)
+  showPhotoDateTimePicker.value = false
+}
+
+async function savePhoto() {
+  if (!editablePhotoResult.value || photoSaving.value) return
+
+  const amount = Number(editablePhotoResult.value.amountValue)
+  if (!amount || amount <= 0) {
+    showToast('请输入有效金额')
+    return
+  }
+
+  const payload = {
     type: 'expense',
-    merchant: photoResult.value.merchant,
-    note: '',
-    spentAt: new Date(),
+    amount,
+    category: editablePhotoResult.value.category,
+    merchant: editablePhotoResult.value.merchant,
+    spentAt: editablePhotoResult.value.spentAtValue,
     inputMethod: 'photo',
-    aiConfidence: 0.96,
-  })
-  showToast({ message: '保存成功', icon: 'success' })
-  router.replace({ name: 'home' })
+  }
+
+  photoSaving.value = true
+  try {
+    const { data } = await createTransaction(payload)
+
+    txStore.addTransaction({
+      id: data.id,
+      categoryId: editablePhotoResult.value.categoryId,
+      categoryName: data.category,
+      amount: Number(data.amount),
+      type: data.type,
+      merchant: data.merchant || '',
+      note: data.note || '',
+      spentAt: new Date(data.spentAt),
+      inputMethod: data.inputMethod,
+      aiConfidence: editablePhotoResult.value.confidence / 100,
+    })
+
+    showToast({ message: '已保存', icon: 'success' })
+    router.replace({ name: 'home' })
+  } catch (error) {
+    showToast(error.response?.data?.message || '保存失败，请稍后重试')
+  } finally {
+    photoSaving.value = false
+  }
 }
 
 // --- Voice mode state ---
-const voiceState = ref('idle') // 'idle' | 'recording' | 'done'
+const voiceState = ref('idle') // 'idle' | 'recording' | 'parsing' | 'done'
 const voiceSeconds = ref(0)
 const voiceText = ref('')
 const voiceResult = ref(null)
+const editableVoiceResult = ref(null)
+const voiceSupported = ref(true)
+const voiceSaving = ref(false)
+const showVoiceMerchantEditor = ref(false)
+const showVoiceAmountEditor = ref(false)
+const showVoiceCategoryPicker = ref(false)
+const showVoiceDateTimePicker = ref(false)
+const voiceMerchantDraft = ref('')
+const voiceAmountDraft = ref('')
+const voiceDatePickerValue = ref(getDatePickerValue(new Date()))
+const voiceTimePickerValue = ref(getTimePickerValue(new Date()))
 let voiceTimer = null
+let voiceSilenceTimer = null
+let speechRecognition = null
+let SpeechRecognitionCtor = null
+let voiceParseStarted = false
+const VOICE_SILENCE_MS = 2500
 
-function startRecording() {
-  voiceState.value = 'recording'
-  voiceSeconds.value = 0
-  voiceTimer = setInterval(() => {
-    voiceSeconds.value++
-    if (voiceSeconds.value === 3) {
-      voiceText.value = '"今天中午在瑞幸花了23买了两杯咖啡，然后去..."'
-    }
-    if (voiceSeconds.value >= 5) {
+onMounted(() => {
+  SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition
+  voiceSupported.value = Boolean(SpeechRecognitionCtor)
+})
+
+function resetVoiceSilenceTimer() {
+  clearTimeout(voiceSilenceTimer)
+  voiceSilenceTimer = setTimeout(() => {
+    if (voiceState.value === 'recording') {
       stopRecording()
     }
-  }, 1000)
+  }, VOICE_SILENCE_MS)
+}
+
+function cleanupVoiceRecognition() {
+  clearInterval(voiceTimer)
+  clearTimeout(voiceSilenceTimer)
+  voiceTimer = null
+  voiceSilenceTimer = null
+  speechRecognition = null
+}
+
+function normalizeVoiceResult(data) {
+  const spentAtDate = data?.spentAt ? new Date(data.spentAt) : new Date()
+  const normalizedDate = Number.isNaN(spentAtDate.getTime()) ? new Date() : spentAtDate
+  const amount = Number(data?.amount) || 0
+  const confidence = Number(data?.confidence) || 0
+  const category = data?.category || '其他'
+  const categoryItem =
+    expenseCategories.value.find((cat) => cat.name === category) ||
+    expenseCategories.value.find((cat) => cat.name === '其他') ||
+    expenseCategories.value[0]
+
+  return {
+    merchant: data?.merchant || '',
+    amount: amount.toFixed(2),
+    amountValue: amount,
+    category,
+    categoryId: categoryItem?.id || null,
+    spentAt: normalizedDate,
+    spentAtValue: toLocalDateTimeString(normalizedDate),
+    time: formatReceiptDate(normalizedDate),
+    confidence,
+  }
+}
+
+function syncEditableVoiceResult(result) {
+  editableVoiceResult.value = result ? { ...result } : null
+}
+
+function resetVoice() {
+  if (speechRecognition && voiceState.value === 'recording') {
+    speechRecognition.stop()
+  }
+  cleanupVoiceRecognition()
+  voiceState.value = 'idle'
+  voiceSeconds.value = 0
+  voiceText.value = ''
+  voiceResult.value = null
+  syncEditableVoiceResult(null)
+  voiceParseStarted = false
+  showVoiceMerchantEditor.value = false
+  showVoiceAmountEditor.value = false
+  showVoiceCategoryPicker.value = false
+  showVoiceDateTimePicker.value = false
+}
+
+function startRecording() {
+  if (!voiceSupported.value || !SpeechRecognitionCtor) {
+    showToast('你的浏览器不支持语音识别,请用 Chrome 或 Edge')
+    return
+  }
+
+  resetVoice()
+  speechRecognition = new SpeechRecognitionCtor()
+  speechRecognition.lang = 'zh-CN'
+  speechRecognition.continuous = true
+  speechRecognition.interimResults = true
+  voiceParseStarted = false
+
+  speechRecognition.onresult = (event) => {
+    let finalText = ''
+    let interimText = ''
+    for (let i = 0; i < event.results.length; i++) {
+      const text = event.results[i][0]?.transcript || ''
+      if (event.results[i].isFinal) {
+        finalText += text
+      } else {
+        interimText += text
+      }
+    }
+    voiceText.value = `${finalText}${interimText}`.trim()
+    resetVoiceSilenceTimer()
+  }
+
+  speechRecognition.onerror = (event) => {
+    cleanupVoiceRecognition()
+    voiceState.value = 'idle'
+    if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+      showToast('请允许麦克风访问')
+    } else {
+      showToast('录音失败,请重试')
+    }
+  }
+
+  speechRecognition.onend = () => {
+    if (voiceState.value === 'recording') {
+      parseRecordedVoice()
+    }
+  }
+
+  try {
+    speechRecognition.start()
+    voiceState.value = 'recording'
+    voiceSeconds.value = 0
+    voiceTimer = setInterval(() => {
+      voiceSeconds.value++
+    }, 1000)
+    resetVoiceSilenceTimer()
+  } catch {
+    cleanupVoiceRecognition()
+    voiceState.value = 'idle'
+    showToast('录音失败,请重试')
+  }
 }
 
 function stopRecording() {
+  if (voiceState.value !== 'recording') return
   clearInterval(voiceTimer)
-  voiceState.value = 'done'
-  voiceResult.value = { amount: '23.00', category: '饮品', categoryId: 2 }
+  clearTimeout(voiceSilenceTimer)
+  if (speechRecognition) {
+    speechRecognition.stop()
+  } else {
+    parseRecordedVoice()
+  }
 }
 
-function saveVoice() {
-  if (!voiceResult.value) return
-  txStore.addTransaction({
-    categoryId: voiceResult.value.categoryId,
-    categoryName: voiceResult.value.category,
-    amount: parseFloat(voiceResult.value.amount),
+async function parseRecordedVoice() {
+  if (voiceParseStarted) return
+  voiceParseStarted = true
+  cleanupVoiceRecognition()
+
+  const text = voiceText.value.trim()
+  if (!text) {
+    voiceState.value = 'idle'
+    voiceParseStarted = false
+    showToast('没有识别到内容,请重试')
+    return
+  }
+
+  voiceState.value = 'parsing'
+  try {
+    const data = await parseVoice(text)
+    voiceResult.value = normalizeVoiceResult(data)
+    syncEditableVoiceResult(voiceResult.value)
+    voiceState.value = 'done'
+  } catch (error) {
+    voiceState.value = 'idle'
+    voiceParseStarted = false
+    showToast(error.response?.data?.message || 'AI 解析失败,请稍后重试')
+  }
+}
+
+function openVoiceMerchantEditor() {
+  if (!editableVoiceResult.value) return
+  voiceMerchantDraft.value = editableVoiceResult.value.merchant || ''
+  showVoiceMerchantEditor.value = true
+}
+
+function confirmVoiceMerchant() {
+  if (!editableVoiceResult.value) return
+  editableVoiceResult.value.merchant = voiceMerchantDraft.value.trim()
+  showVoiceMerchantEditor.value = false
+}
+
+function openVoiceAmountEditor() {
+  if (!editableVoiceResult.value) return
+  voiceAmountDraft.value = String(editableVoiceResult.value.amount || '')
+  showVoiceAmountEditor.value = true
+}
+
+function confirmVoiceAmount() {
+  if (!editableVoiceResult.value) return
+
+  const amount = Number(voiceAmountDraft.value)
+  if (!amount || amount <= 0) {
+    showToast('请输入有效金额')
+    return
+  }
+
+  editableVoiceResult.value.amountValue = amount
+  editableVoiceResult.value.amount = amount.toFixed(2)
+  showVoiceAmountEditor.value = false
+}
+
+async function openVoiceCategoryPicker() {
+  if (!editableVoiceResult.value) return
+  try {
+    await catStore.fetchCategories('expense')
+  } catch (error) {
+    showToast(error.response?.data?.message || '获取分类失败')
+  }
+  showVoiceCategoryPicker.value = true
+}
+
+function selectVoiceCategory(category) {
+  if (!editableVoiceResult.value) return
+  editableVoiceResult.value.category = category.name
+  editableVoiceResult.value.categoryId = category.id
+  showVoiceCategoryPicker.value = false
+}
+
+function openVoiceDateTimePicker() {
+  if (!editableVoiceResult.value) return
+  const date = new Date(editableVoiceResult.value.spentAtValue)
+  const normalizedDate = Number.isNaN(date.getTime()) ? new Date() : date
+  voiceDatePickerValue.value = getDatePickerValue(normalizedDate)
+  voiceTimePickerValue.value = getTimePickerValue(normalizedDate)
+  showVoiceDateTimePicker.value = true
+}
+
+function confirmVoiceDateTime() {
+  if (!editableVoiceResult.value) return
+  const [year, month, day] = voiceDatePickerValue.value.map(Number)
+  const [hour, minute] = voiceTimePickerValue.value.map(Number)
+  const date = new Date(year, month - 1, day, hour, minute, 0)
+  editableVoiceResult.value.spentAt = date
+  editableVoiceResult.value.spentAtValue = toLocalDateTimeString(date)
+  editableVoiceResult.value.time = formatReceiptDate(date)
+  showVoiceDateTimePicker.value = false
+}
+
+async function saveVoice() {
+  if (!editableVoiceResult.value || voiceSaving.value) return
+
+  const amount = Number(editableVoiceResult.value.amountValue)
+  if (!amount || amount <= 0) {
+    showToast('请输入有效金额')
+    return
+  }
+
+  const payload = {
     type: 'expense',
-    merchant: '瑞幸咖啡',
-    note: '',
-    spentAt: new Date(),
+    amount,
+    category: editableVoiceResult.value.category,
+    merchant: editableVoiceResult.value.merchant,
+    note: voiceText.value,
+    spentAt: editableVoiceResult.value.spentAtValue,
     inputMethod: 'voice',
-    aiConfidence: 0.88,
-  })
-  showToast({ message: '保存成功', icon: 'success' })
-  router.replace({ name: 'home' })
+  }
+
+  voiceSaving.value = true
+  try {
+    const { data } = await createTransaction(payload)
+
+    txStore.addTransaction({
+      id: data.id,
+      categoryId: editableVoiceResult.value.categoryId,
+      categoryName: data.category,
+      amount: Number(data.amount),
+      type: data.type,
+      merchant: data.merchant || '',
+      note: data.note || '',
+      spentAt: new Date(data.spentAt),
+      inputMethod: data.inputMethod,
+      aiConfidence: editableVoiceResult.value.confidence / 100,
+    })
+
+    showToast({ message: '已保存', icon: 'success' })
+    router.replace({ name: 'home' })
+  } catch (error) {
+    showToast(error.response?.data?.message || '保存失败，请稍后重试')
+  } finally {
+    voiceSaving.value = false
+  }
 }
 
 function formatVoiceTime(s) {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
 
-onUnmounted(() => clearInterval(voiceTimer))
+onUnmounted(() => {
+  clearInterval(voiceTimer)
+  clearTimeout(voiceSilenceTimer)
+  if (speechRecognition && voiceState.value === 'recording') {
+    speechRecognition.stop()
+  }
+  clearUploadedImage()
+})
 </script>
 
 <template>
@@ -482,27 +926,22 @@ onUnmounted(() => clearInterval(voiceTimer))
       </div>
 
       <div class="viewfinder">
-        <div v-if="photoState === 'idle'" class="vf-idle">
+        <div v-if="!uploadedImage" class="vf-idle">
           <div class="vf-icon">📸</div>
           <p class="vf-hint">点击拍照识别小票</p>
         </div>
 
-        <template v-else>
-          <div v-if="photoState === 'recognizing' || photoState === 'done'" class="vf-receipt">
+        <template v-else-if="photoState === 'recognizing' || photoState === 'done'">
+          <div class="vf-receipt">
+            <img :src="uploadedImage" class="receipt-image" alt="已上传的小票照片" />
+            <div v-if="photoState === 'recognizing'" class="recognizing-overlay"></div>
             <div class="ai-pill">
               <span class="ai-dot"></span>
               {{ photoState === 'recognizing' ? 'AI 识别中...' : 'AI 识别完成' }}
             </div>
-            <div class="receipt-mock">
-              <p class="r-title">星巴克咖啡</p>
-              <p class="r-sub">国贸店 No.2358</p>
-              <div class="r-divider"></div>
-              <div class="r-row"><span>拿铁 大杯</span><span>¥37.00</span></div>
-              <div class="r-row"><span>糖浆 ×1</span><span>¥0.00</span></div>
-              <div class="r-divider"></div>
-              <div class="r-row bold"><span>合计</span><span>¥37.00</span></div>
-              <p class="r-date">2026-05-09 08:20</p>
-            </div>
+            <p v-if="photoState === 'recognizing'" class="ai-loading-hint">
+              真识别通常需要 5-10 秒,请稍候
+            </p>
             <div v-if="photoState === 'recognizing'" class="scan-line"></div>
           </div>
         </template>
@@ -514,53 +953,186 @@ onUnmounted(() => clearInterval(voiceTimer))
         </div>
       </div>
 
-      <div v-if="photoResult" class="ai-result-card">
+      <div v-if="editablePhotoResult" class="ai-result-card">
         <div class="ar-header">
           <span class="ar-title">AI 识别结果</span>
-          <van-button size="small" round class="done-btn" @click="savePhoto">完成</van-button>
+          <van-button size="small" round class="done-btn" :loading="photoSaving" @click="savePhoto">
+            完成
+          </van-button>
         </div>
         <div class="ar-grid">
           <div class="ar-field">
             <p class="ar-label">商家</p>
-            <p class="ar-value">{{ photoResult.merchant }}</p>
+            <div class="ar-value-row">
+              <span class="ar-value">{{ editablePhotoResult.merchant || '未填写' }}</span>
+              <button type="button" class="ar-edit-btn" @click="openPhotoMerchantEditor">
+                <van-icon name="edit" size="16" color="rgba(255,255,255,0.7)" />
+              </button>
+            </div>
           </div>
           <div class="ar-field">
             <p class="ar-label">金额</p>
             <div class="ar-value-row">
-              <span class="ar-value">¥{{ photoResult.amount }}</span>
-              <van-icon name="edit" size="16" color="rgba(255,255,255,0.7)" />
+              <span class="ar-value">¥{{ editablePhotoResult.amount }}</span>
+              <button type="button" class="ar-edit-btn" @click="openPhotoAmountEditor">
+                <van-icon name="edit" size="16" color="rgba(255,255,255,0.7)" />
+              </button>
             </div>
           </div>
           <div class="ar-field">
             <p class="ar-label">分类</p>
             <div class="ar-value-row">
-              <span class="ar-value">☕ {{ photoResult.category }}</span>
-              <van-icon name="edit" size="16" color="rgba(255,255,255,0.7)" />
+              <span class="ar-value">{{ editablePhotoResult.category }}</span>
+              <button type="button" class="ar-edit-btn" @click="openPhotoCategoryPicker">
+                <van-icon name="edit" size="16" color="rgba(255,255,255,0.7)" />
+              </button>
             </div>
           </div>
           <div class="ar-field">
             <p class="ar-label">时间</p>
             <div class="ar-value-row">
-              <span class="ar-value">{{ photoResult.time }}</span>
-              <van-icon name="edit" size="16" color="rgba(255,255,255,0.7)" />
+              <span class="ar-value">{{ editablePhotoResult.time }}</span>
+              <button type="button" class="ar-edit-btn" @click="openPhotoDateTimePicker">
+                <van-icon name="edit" size="16" color="rgba(255,255,255,0.7)" />
+              </button>
             </div>
           </div>
         </div>
+        <p v-if="editablePhotoResult.confidence < 80" class="confidence-warning">
+          识别置信度较低,请核对
+        </p>
       </div>
 
+      <van-popup v-model:show="showPhotoMerchantEditor" round position="bottom">
+        <div class="photo-edit-panel">
+          <p class="photo-edit-title">修改商家</p>
+          <van-field
+            v-model="photoMerchantDraft"
+            label="商家"
+            placeholder="请输入商家名称"
+            clearable
+          />
+          <div class="photo-edit-actions">
+            <button type="button" class="dialog-cancel" @click="showPhotoMerchantEditor = false">
+              取消
+            </button>
+            <button type="button" class="dialog-confirm" @click="confirmPhotoMerchant">
+              确定
+            </button>
+          </div>
+        </div>
+      </van-popup>
+
+      <van-popup v-model:show="showPhotoAmountEditor" round position="bottom">
+        <div class="photo-edit-panel">
+          <p class="photo-edit-title">修改金额</p>
+          <van-field
+            v-model="photoAmountDraft"
+            label="金额"
+            placeholder="请输入金额"
+            type="number"
+            inputmode="decimal"
+            clearable
+          />
+          <div class="photo-edit-actions">
+            <button type="button" class="dialog-cancel" @click="showPhotoAmountEditor = false">
+              取消
+            </button>
+            <button type="button" class="dialog-confirm" @click="confirmPhotoAmount">
+              确定
+            </button>
+          </div>
+        </div>
+      </van-popup>
+
+      <van-popup v-model:show="showPhotoCategoryPicker" round position="bottom">
+        <div class="photo-edit-panel">
+          <p class="photo-edit-title">选择分类</p>
+          <div class="photo-cat-grid">
+            <button
+              v-for="cat in expenseCategories"
+              :key="cat.id"
+              type="button"
+              :class="['photo-cat-option', { selected: editablePhotoResult?.categoryId === cat.id }]"
+              @click="selectPhotoCategory(cat)"
+            >
+              <span class="photo-cat-icon" :style="{ background: cat.bg }">{{ cat.icon }}</span>
+              <span>{{ cat.name }}</span>
+            </button>
+          </div>
+        </div>
+      </van-popup>
+
+      <van-popup
+        v-model:show="showPhotoDateTimePicker"
+        round
+        position="bottom"
+        class="date-time-popup"
+        overlay-class="date-time-overlay"
+      >
+        <van-picker-group
+          title="修改日期时间"
+          :tabs="['日期', '时间']"
+          @confirm="confirmPhotoDateTime"
+          @cancel="showPhotoDateTimePicker = false"
+        >
+          <van-date-picker
+            v-model="photoDatePickerValue"
+            :min-date="minDate"
+            :max-date="maxDate"
+          />
+          <van-time-picker
+            v-model="photoTimePickerValue"
+            :columns-type="['hour', 'minute']"
+          />
+        </van-picker-group>
+      </van-popup>
+
       <div class="photo-actions">
-        <button class="photo-act-btn" @click="openGallery">
+        <button
+          class="photo-act-btn"
+          :disabled="photoState === 'recognizing'"
+          aria-label="从相册选择"
+          title="从相册选择"
+          @click="openGallery"
+        >
           <van-icon name="photo-o" size="24" color="#6b7280" />
         </button>
-        <button class="photo-shoot-btn" @click="triggerCapture">
+        <button
+          class="photo-shoot-btn"
+          :disabled="photoState === 'recognizing'"
+          aria-label="拍照"
+          title="拍照"
+          @click="triggerCapture"
+        >
           <div class="shoot-inner"></div>
         </button>
-        <button class="photo-act-btn" @click="retryPhoto">
+        <button
+          class="photo-act-btn"
+          :disabled="photoState === 'recognizing'"
+          aria-label="重拍"
+          title="重拍"
+          @click="retryPhoto"
+        >
           <van-icon name="replay" size="24" color="#6b7280" />
         </button>
       </div>
 
-      <input ref="fileInput" type="file" accept="image/*" class="hidden-input" />
+      <input
+        ref="fileInput"
+        type="file"
+        accept="image/*"
+        class="hidden-input"
+        @change="handlePhotoSelected"
+      />
+      <input
+        ref="cameraInput"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        class="hidden-input"
+        @change="handlePhotoSelected"
+      />
     </template>
 
     <!-- ========== VOICE MODE ========== -->
@@ -570,17 +1142,23 @@ onUnmounted(() => clearInterval(voiceTimer))
           <van-icon name="arrow-left" size="22" />
         </button>
         <span class="nav-title">语音记账</span>
-        <span v-if="voiceResult" class="nav-action" @click="saveVoice">保存</span>
-        <span v-else class="nav-placeholder"></span>
+        <span class="nav-placeholder"></span>
       </div>
 
       <div class="card voice-card">
         <div class="rec-indicator">
           <span v-if="voiceState === 'recording'" class="rec-dot"></span>
           <span v-if="voiceState === 'recording'" class="rec-text">录音中 {{ formatVoiceTime(voiceSeconds) }}</span>
+          <span v-else-if="voiceState === 'parsing'" class="rec-parsing">
+            <van-loading size="18" color="#6b6ef5" />
+            AI 解析中...
+          </span>
           <span v-else-if="voiceState === 'done'" class="rec-done">识别完成</span>
           <span v-else class="rec-hint">点击开始录音</span>
         </div>
+        <p v-if="!voiceSupported" class="voice-support-tip">
+          你的浏览器不支持语音识别,请用 Chrome 或 Edge
+        </p>
         <div class="waveform">
           <div
             v-for="i in 14"
@@ -596,23 +1174,133 @@ onUnmounted(() => clearInterval(voiceTimer))
         </div>
       </div>
 
-      <template v-if="voiceResult">
+      <template v-if="editableVoiceResult">
         <div class="card">
           <p class="ai-extracted-title">AI 帮你提取了这些信息</p>
           <div class="extracted-amount">
             <p class="ea-label">金额</p>
-            <p class="ea-value">¥ {{ voiceResult.amount }}</p>
+            <div class="voice-field-row">
+              <p class="ea-value">¥ {{ editableVoiceResult.amount }}</p>
+              <button type="button" class="voice-edit-btn" @click="openVoiceAmountEditor">
+                <van-icon name="edit" size="16" color="#6b6ef5" />
+              </button>
+            </div>
           </div>
-          <div class="extracted-cat">
+          <div class="extracted-cat voice-extracted-field">
             <p class="ea-label">分类</p>
             <div class="ea-cat-row">
-              <div class="ea-cat-icon" style="background: #ede9fe">☕</div>
-              <span class="ea-cat-name">{{ voiceResult.category }}</span>
-              <span class="link-btn">更改</span>
+              <div class="ea-cat-icon" style="background: #ede9fe">📌</div>
+              <span class="ea-cat-name">{{ editableVoiceResult.category }}</span>
+              <button type="button" class="voice-edit-btn" @click="openVoiceCategoryPicker">
+                <van-icon name="edit" size="16" color="#6b6ef5" />
+              </button>
+            </div>
+          </div>
+          <div class="voice-extracted-field">
+            <p class="ea-label">商家</p>
+            <div class="voice-field-row">
+              <span class="voice-field-value">{{ editableVoiceResult.merchant || '未填写' }}</span>
+              <button type="button" class="voice-edit-btn" @click="openVoiceMerchantEditor">
+                <van-icon name="edit" size="16" color="#6b6ef5" />
+              </button>
+            </div>
+          </div>
+          <div class="voice-extracted-field">
+            <p class="ea-label">时间</p>
+            <div class="voice-field-row">
+              <span class="voice-field-value">{{ editableVoiceResult.time }}</span>
+              <button type="button" class="voice-edit-btn" @click="openVoiceDateTimePicker">
+                <van-icon name="edit" size="16" color="#6b6ef5" />
+              </button>
             </div>
           </div>
         </div>
       </template>
+
+      <van-popup v-model:show="showVoiceMerchantEditor" round position="bottom">
+        <div class="photo-edit-panel">
+          <p class="photo-edit-title">修改商家</p>
+          <van-field
+            v-model="voiceMerchantDraft"
+            label="商家"
+            placeholder="请输入商家名称"
+            clearable
+          />
+          <div class="photo-edit-actions">
+            <button type="button" class="dialog-cancel" @click="showVoiceMerchantEditor = false">
+              取消
+            </button>
+            <button type="button" class="dialog-confirm" @click="confirmVoiceMerchant">
+              确定
+            </button>
+          </div>
+        </div>
+      </van-popup>
+
+      <van-popup v-model:show="showVoiceAmountEditor" round position="bottom">
+        <div class="photo-edit-panel">
+          <p class="photo-edit-title">修改金额</p>
+          <van-field
+            v-model="voiceAmountDraft"
+            label="金额"
+            placeholder="请输入金额"
+            type="number"
+            inputmode="decimal"
+            clearable
+          />
+          <div class="photo-edit-actions">
+            <button type="button" class="dialog-cancel" @click="showVoiceAmountEditor = false">
+              取消
+            </button>
+            <button type="button" class="dialog-confirm" @click="confirmVoiceAmount">
+              确定
+            </button>
+          </div>
+        </div>
+      </van-popup>
+
+      <van-popup v-model:show="showVoiceCategoryPicker" round position="bottom">
+        <div class="photo-edit-panel">
+          <p class="photo-edit-title">选择分类</p>
+          <div class="photo-cat-grid">
+            <button
+              v-for="cat in expenseCategories"
+              :key="cat.id"
+              type="button"
+              :class="['photo-cat-option', { selected: editableVoiceResult?.categoryId === cat.id }]"
+              @click="selectVoiceCategory(cat)"
+            >
+              <span class="photo-cat-icon" :style="{ background: cat.bg }">{{ cat.icon }}</span>
+              <span>{{ cat.name }}</span>
+            </button>
+          </div>
+        </div>
+      </van-popup>
+
+      <van-popup
+        v-model:show="showVoiceDateTimePicker"
+        round
+        position="bottom"
+        class="date-time-popup"
+        overlay-class="date-time-overlay"
+      >
+        <van-picker-group
+          title="修改日期时间"
+          :tabs="['日期', '时间']"
+          @confirm="confirmVoiceDateTime"
+          @cancel="showVoiceDateTimePicker = false"
+        >
+          <van-date-picker
+            v-model="voiceDatePickerValue"
+            :min-date="minDate"
+            :max-date="maxDate"
+          />
+          <van-time-picker
+            v-model="voiceTimePickerValue"
+            :columns-type="['hour', 'minute']"
+          />
+        </van-picker-group>
+      </van-popup>
 
       <div class="voice-ctrl">
         <van-button
@@ -620,6 +1308,7 @@ onUnmounted(() => clearInterval(voiceTimer))
           type="primary"
           round
           class="rec-btn"
+          :disabled="!voiceSupported"
           @click="startRecording"
         >
           开始录音
@@ -632,14 +1321,26 @@ onUnmounted(() => clearInterval(voiceTimer))
         >
           结束录音
         </van-button>
-        <van-button
-          v-else
-          round
-          class="rec-btn retry"
-          @click="voiceState = 'idle'; voiceText = ''; voiceResult = null; voiceSeconds = 0"
-        >
-          重新录音
-        </van-button>
+        <div v-else-if="voiceState === 'done'" class="voice-done-actions">
+          <button
+            type="button"
+            class="voice-retry-btn"
+            :disabled="voiceSaving"
+            @click="resetVoice"
+          >
+            <van-icon name="replay" size="16" />
+            重新录音
+          </button>
+          <van-button
+            round
+            class="voice-save-btn"
+            :loading="voiceSaving"
+            loading-text="保存中..."
+            @click="saveVoice"
+          >
+            保存
+          </van-button>
+        </div>
       </div>
     </template>
 
@@ -975,57 +1676,43 @@ onUnmounted(() => clearInterval(voiceTimer))
   animation: blink 1s infinite;
 }
 
+.ai-loading-hint {
+  position: absolute;
+  top: 52px;
+  left: 16px;
+  right: 16px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  text-shadow: 0 1px 4px rgba(17, 24, 39, 0.35);
+  z-index: 2;
+}
+
 @keyframes blink {
   0%, 100% { opacity: 1 }
   50% { opacity: 0.3 }
 }
 
-.receipt-mock {
-  background: white;
-  border-radius: 12px;
-  padding: 16px 20px;
-  width: calc(100% - 48px);
-  position: relative;
+.vf-receipt {
+  position: absolute;
+  inset: 0;
+}
+
+.receipt-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 20px;
+  display: block;
+}
+
+.recognizing-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(107, 110, 245, 0.28);
+  border-radius: 20px;
   z-index: 1;
-}
-
-.r-title {
-  font-size: 16px;
-  font-weight: 700;
-  text-align: center;
-  margin-bottom: 4px;
-}
-
-.r-sub {
-  font-size: 12px;
-  color: #9ca3af;
-  text-align: center;
-  margin-bottom: 12px;
-}
-
-.r-divider {
-  height: 1px;
-  background: #e5e7eb;
-  margin: 8px 0;
-}
-
-.r-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  margin: 6px 0;
-}
-
-.r-row.bold {
-  font-weight: 700;
-  font-size: 15px;
-}
-
-.r-date {
-  font-size: 11px;
-  color: #9ca3af;
-  text-align: center;
-  margin-top: 8px;
 }
 
 .scan-line {
@@ -1117,6 +1804,88 @@ onUnmounted(() => clearInterval(voiceTimer))
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+
+.ar-edit-btn {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.confidence-warning {
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.photo-edit-panel {
+  padding: 18px 16px 22px;
+  background: #fff;
+}
+
+.photo-edit-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 14px;
+  color: #1a1a2e;
+  text-align: center;
+}
+
+.photo-edit-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.photo-cat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.photo-cat-option {
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: #f8f9fc;
+  color: #4b5563;
+  min-height: 78px;
+  padding: 10px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.photo-cat-option.selected {
+  border-color: #6b6ef5;
+  background: #f0f1ff;
+  color: #4f46e5;
+  font-weight: 700;
+}
+
+.photo-cat-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
 }
 
 /* Photo action buttons */
@@ -1137,6 +1906,12 @@ onUnmounted(() => clearInterval(voiceTimer))
   align-items: center;
   justify-content: center;
   cursor: pointer;
+}
+
+.photo-act-btn:disabled,
+.photo-shoot-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .photo-shoot-btn {
@@ -1196,8 +1971,21 @@ onUnmounted(() => clearInterval(voiceTimer))
   color: #10b981;
 }
 
+.rec-parsing {
+  color: #6b6ef5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .rec-hint {
   color: #9ca3af;
+}
+
+.voice-support-tip {
+  color: #ef4444;
+  font-size: 13px;
+  text-align: center;
 }
 
 .waveform {
@@ -1258,7 +2046,9 @@ onUnmounted(() => clearInterval(voiceTimer))
   margin-bottom: 16px;
 }
 
-.extracted-cat {}
+.voice-extracted-field {
+  margin-top: 14px;
+}
 
 .ea-label {
   font-size: 13px;
@@ -1269,6 +2059,7 @@ onUnmounted(() => clearInterval(voiceTimer))
 .ea-value {
   font-size: 32px;
   font-weight: 700;
+  margin: 0;
 }
 
 .ea-cat-row {
@@ -1299,6 +2090,32 @@ onUnmounted(() => clearInterval(voiceTimer))
   cursor: pointer;
 }
 
+.voice-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.voice-field-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.voice-edit-btn {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: #f0f1ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
 .voice-ctrl {
   display: flex;
   justify-content: center;
@@ -1320,10 +2137,43 @@ onUnmounted(() => clearInterval(voiceTimer))
   border-color: #6b6ef5 !important;
 }
 
-.rec-btn.retry {
+.voice-done-actions {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.voice-retry-btn {
+  min-width: 94px;
+  height: 40px;
+  border: none;
+  border-radius: 12px;
+  background: #eef0f5;
+  color: #6b7280;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.voice-retry-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.voice-save-btn {
+  width: min(230px, calc(100% - 118px));
+  height: 52px;
   background: #6b6ef5 !important;
   border-color: #6b6ef5 !important;
   color: white !important;
+  font-size: 17px;
+  font-weight: 600;
 }
 
 /* Bottom mode bar — uses transform centering to stay within max-width */
