@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { use } from 'echarts/core'
@@ -7,6 +7,7 @@ import { LineChart, BarChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
+import { getInsights } from '@/api/insights'
 import { deleteTransaction as deleteTransactionApi, getTransactions } from '@/api/transaction'
 import { useTransactionsStore } from '@/stores/transactions'
 import { useCategoriesStore } from '@/stores/categories'
@@ -34,6 +35,9 @@ const monthlyStats = ref([])
 const currentMonthChartTransactions = ref([])
 const previousMonthChartTransactions = ref([])
 const previousYearMonthExpense = ref(null)
+const insightLoading = ref(false)
+const insightError = ref(false)
+const insightResult = ref(null)
 const selectedYearMonth = ref(getCurrentYearMonth())
 const selectedMonthLabel = ref('本月')
 const showMonthSheet = ref(false)
@@ -368,6 +372,27 @@ async function loadChartData() {
 
 onMounted(loadChartData)
 
+const displayInsights = computed(() => insightResult.value?.insights?.slice(0, 5) || [])
+const insightPeriod = computed(() => insightResult.value?.period || '最近30天')
+
+async function loadInsights(force = false) {
+  insightLoading.value = true
+  insightError.value = false
+  try {
+    insightResult.value = await getInsights(force)
+  } catch {
+    insightError.value = true
+  } finally {
+    insightLoading.value = false
+  }
+}
+
+watch(view, (nextView) => {
+  if (nextView === 'chart') {
+    loadInsights()
+  }
+})
+
 const CATEGORY_COLORS = {
   餐饮: '#6E73F2',
   交通: '#8B7DF7',
@@ -503,54 +528,6 @@ const categoryBars = computed(() => {
   }))
 })
 
-const previousMonthCategoryMap = computed(() => {
-  const map = {}
-  previousMonthChartTransactions.value
-    .filter((tx) => tx.type === 'expense')
-    .forEach((tx) => {
-      const category = getTransactionCategory(tx)
-      if (!map[category]) map[category] = { value: 0, count: 0 }
-      map[category].value += Number(tx.amount || 0)
-      map[category].count += 1
-    })
-  return map
-})
-
-const aiInsight = computed(() => {
-  if (currentMonthExpense.value <= 0 || categoryBars.value.length === 0) {
-    return {
-      text: '本月还没有支出记录，先记几笔后我再帮你分析消费变化 →',
-      category: null,
-    }
-  }
-
-  const top = categoryBars.value[0]
-  const pct = Math.round((top.value / currentMonthExpense.value) * 100)
-  const previous = previousMonthCategoryMap.value[top.name] || { value: 0, count: 0 }
-  const diff = top.value - previous.value
-  const countDiff = top.count - previous.count
-  const amountText = diff >= 0
-    ? `多了 ¥${formatMoney(diff)}`
-    : `少了 ¥${formatMoney(Math.abs(diff))}`
-  const countText = countDiff >= 0
-    ? `多 ${countDiff} 笔`
-    : `少 ${Math.abs(countDiff)} 笔`
-
-  return {
-    text: `你这个月在${top.name}上花了 ¥${formatMoney(top.value)},占总支出 ${pct}%。比上月${amountText},主要因为该分类记录比上月${countText} →`,
-    category: top.name,
-  }
-})
-
-async function openInsightCategory() {
-  if (!aiInsight.value.category) return
-  view.value = 'list'
-  selectedYearMonth.value = getCurrentYearMonth()
-  selectedMonthLabel.value = '本月'
-  selectedCategory.value = aiInsight.value.category
-  filters.value = { type: 'all', minAmount: '', maxAmount: '', keyword: '' }
-  await loadTransactions()
-}
 </script>
 
 <template>
@@ -783,15 +760,57 @@ async function openInsightCategory() {
       </div>
 
       <!-- AI insight -->
-      <div v-if="!chartLoading" class="card ai-card">
-        <div class="ai-header">
-          <div class="ai-avatar">🤖</div>
-          <span class="ai-title">AI 洞察</span>
+      <section v-if="!chartLoading" class="ai-section">
+        <div class="ai-meta">
+          <span class="ai-section-title">AI 洞察 · {{ insightPeriod }}</span>
+          <div class="ai-meta-actions">
+            <span>由 DeepSeek 生成</span>
+            <button
+              type="button"
+              class="ai-refresh"
+              aria-label="刷新 AI 洞察"
+              :disabled="insightLoading"
+              @click="loadInsights(true)"
+            >
+              🔄
+            </button>
+          </div>
         </div>
-        <p class="ai-text" @click="openInsightCategory">
-          {{ aiInsight.text }}
-        </p>
-      </div>
+
+        <div v-if="insightLoading" class="ai-loading-card">
+          <van-loading color="#6b6ef5" size="22px" />
+          <div>
+            <p>AI 正在分析你的消费习惯...</p>
+            <span>通常需要 5-15 秒</span>
+          </div>
+        </div>
+
+        <div v-else-if="insightError" class="ai-error-card">
+          <p>AI 洞察暂时不可用,请稍后再试</p>
+          <button type="button" @click="loadInsights()">重试</button>
+        </div>
+
+        <div v-else class="ai-insight-list">
+          <article
+            v-for="(insight, index) in displayInsights"
+            :key="`${insight.type || 'general'}-${index}`"
+            class="ai-insight-card"
+          >
+            <div class="ai-insight-title">
+              <span class="ai-emoji">{{ insight.emoji || '💡' }}</span>
+              <strong>{{ insight.title }}</strong>
+            </div>
+            <p>{{ insight.content }}</p>
+          </article>
+          <article v-if="displayInsights.length === 0" class="ai-insight-card">
+            <div class="ai-insight-title">
+              <span class="ai-emoji">🌱</span>
+              <strong>洞察在路上</strong>
+            </div>
+            <p>先记几笔消费,我再帮你看看最近的花钱习惯。</p>
+          </article>
+        </div>
+      </section>
     </template>
   </div>
 </template>
@@ -1254,38 +1273,144 @@ async function openInsightCategory() {
   transition: width 0.4s;
 }
 
-.ai-card {
-  padding: 16px;
+.ai-section {
+  margin-bottom: 16px;
+  min-width: 0;
 }
 
-.ai-header {
+.ai-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 0 2px 10px;
+}
+
+.ai-section-title {
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 650;
+  color: #4338ca;
+}
+
+.ai-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #8b8ea3;
+}
+
+.ai-refresh {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 9px;
+  background: #e7e8ff;
+  color: #5b5fe8;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ai-refresh:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.ai-loading-card,
+.ai-error-card,
+.ai-insight-card {
+  border-radius: 12px;
+  box-shadow: 0 5px 18px rgba(97, 86, 214, 0.1);
+}
+
+.ai-loading-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px;
+  background: linear-gradient(135deg, #f1efff, #e4e7ff);
+  color: #4338ca;
+}
+
+.ai-loading-card p {
+  margin-bottom: 3px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ai-loading-card span {
+  font-size: 12px;
+  color: #7773ad;
+}
+
+.ai-error-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  background: #f0efff;
+  color: #59536f;
+}
+
+.ai-error-card p {
+  min-width: 0;
+  font-size: 14px;
+}
+
+.ai-error-card button {
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 13px;
+  border: none;
+  border-radius: 10px;
+  background: #6b6ef5;
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ai-insight-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+.ai-insight-card {
+  min-width: 0;
+  padding: 16px;
+  background: linear-gradient(135deg, #f1efff, #e8e9ff);
+}
+
+.ai-insight-title {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+  color: #352f78;
+  overflow-wrap: anywhere;
 }
 
-.ai-avatar {
-  width: 36px;
-  height: 36px;
-  background: #6b6ef5;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
+.ai-emoji {
+  font-size: 23px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
-.ai-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #6b6ef5;
+.ai-insight-title strong {
+  font-size: 16px;
 }
 
-.ai-text {
+.ai-insight-card p {
   font-size: 14px;
-  color: #6b7280;
-  line-height: 1.6;
-  cursor: pointer;
+  color: #5a5d72;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
 }
 </style>
