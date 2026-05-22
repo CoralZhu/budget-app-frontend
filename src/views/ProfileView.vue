@@ -70,13 +70,17 @@ async function handleLogout() {
         <span class="menu-desc">{{ catStore.categories.length }} 个</span>
         <van-icon name="arrow" color="#d1d5db" size="16" />
       </div>
-      <div class="divider"></div>
+    </div>
+
+    <!-- Data section -->
+    <p class="section-label">数据管理</p>
+    <div class="menu-card">
       <div class="menu-item" @click="router.push({ name: 'import' })">
-        <div class="menu-icon" style="background: #d1fae5">
-          <van-icon name="description" color="#059669" size="20" />
+        <div class="menu-icon" style="background: #eef0fe">
+          <van-icon name="down" color="#6e73f2" size="20" />
         </div>
-        <span class="menu-text">账单导入</span>
-        <span class="menu-desc">支付宝/微信</span>
+        <span class="menu-text">导入账单</span>
+        <span class="menu-desc">支持支付宝、微信账单 CSV</span>
         <van-icon name="arrow" color="#d1d5db" size="16" />
       </div>
     </div>
