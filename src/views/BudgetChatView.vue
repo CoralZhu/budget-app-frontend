@@ -1,9 +1,15 @@
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { showToast } from 'vant'
-import { continueBudgetChat, startBudgetChat } from '@/api/agent'
+import {
+  continueBudgetChat,
+  getConversationDetail,
+  listConversations,
+  startBudgetChat,
+} from '@/api/agent'
 
+const route = useRoute()
 const router = useRouter()
 
 const messages = ref([])
@@ -11,6 +17,9 @@ const inputText = ref('')
 const isLoading = ref(false)
 const loadingText = ref('AI 正在初始化...')
 const bottomRef = ref(null)
+const conversationId = ref(null)
+const showHistoryPopup = ref(false)
+const historyList = ref([])
 
 const visibleMessages = computed(() =>
   messages.value.filter((message) => {
@@ -39,15 +48,29 @@ async function initChat() {
   try {
     isLoading.value = true
     loadingText.value = 'AI 正在初始化...'
-    const response = await startBudgetChat(1)
+    const queryConvId = route.query.conversationId
+    const response = queryConvId
+      ? await getConversationDetail(queryConvId)
+      : await startBudgetChat(1)
     const data = unwrapData(response)
+
     messages.value = Array.isArray(data.messages) ? data.messages : []
-    await scrollToBottom('auto')
+    conversationId.value = data.id || data.conversation_id || queryConvId || null
+
+    if (!queryConvId && data.conversation_id) {
+      router.replace({
+        path: '/budget-chat',
+        query: { ...route.query, conversationId: data.conversation_id },
+      })
+    }
   } catch (error) {
-    showToast(getErrorMessage(error))
+    console.error('加载对话失败:', error)
+    showToast('AI 初始化失败，请稍后重试')
   } finally {
     isLoading.value = false
   }
+
+  await scrollToBottom('auto')
 }
 
 async function sendMessage() {
@@ -61,25 +84,67 @@ async function sendMessage() {
 
   try {
     isLoading.value = true
-    const response = await continueBudgetChat(1, messages.value)
+    const response = await continueBudgetChat(1, messages.value, conversationId.value)
     const data = unwrapData(response)
     if (Array.isArray(data.messages)) {
       messages.value = data.messages
     }
+    conversationId.value = data.conversation_id || conversationId.value
     await scrollToBottom()
 
     if (data.budget_saved) {
-      showToast({ message: '✅ 预算已保存成功！', icon: 'success' })
+      showToast({ message: '✅ 预算已保存成功！', type: 'success' })
       window.setTimeout(() => {
         router.push('/budget')
       }, 2000)
     }
   } catch (error) {
+    console.error('AI 请求失败:', error)
     showToast(getErrorMessage(error))
   } finally {
     isLoading.value = false
     await scrollToBottom()
   }
+}
+
+watch(showHistoryPopup, async (val) => {
+  if (!val) return
+
+  try {
+    const response = await listConversations(1, 'budget_planner')
+    const data = unwrapData(response)
+    historyList.value = Array.isArray(data) ? data : []
+  } catch (error) {
+    showToast(error.response?.data?.message || '获取对话历史失败')
+  }
+})
+
+function switchConversation(convId) {
+  showHistoryPopup.value = false
+  if (String(convId) === String(conversationId.value)) return
+
+  router.replace({
+    path: '/budget-chat',
+    query: { conversationId: convId },
+  })
+  window.location.reload()
+}
+
+function startNewConversation() {
+  showHistoryPopup.value = false
+  router.replace({ path: '/budget-chat' })
+  window.location.reload()
+}
+
+function formatTime(iso) {
+  if (!iso) return ''
+  const date = new Date(iso)
+  const now = new Date()
+  const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24))
+  if (diffDays === 0) return `今天 ${date.toTimeString().slice(0, 5)}`
+  if (diffDays === 1) return '昨天'
+  if (diffDays < 7) return `${diffDays} 天前`
+  return date.toISOString().slice(0, 10)
 }
 
 onMounted(initChat)
@@ -89,7 +154,10 @@ onMounted(initChat)
   <div class="chat-page">
     <div class="nav-bar">
       <van-icon name="arrow-left" size="22" class="back-icon" @click="router.back()" />
-      <span class="nav-title">AI 预算规划</span>
+      <div class="nav-title-wrap">
+        <span class="nav-title">AI 预算规划</span>
+        <van-icon name="clock-o" class="history-icon" @click="showHistoryPopup = true" />
+      </div>
       <span class="nav-placeholder"></span>
     </div>
 
@@ -131,6 +199,35 @@ onMounted(initChat)
         发送
       </button>
     </footer>
+
+    <van-popup
+      v-model:show="showHistoryPopup"
+      position="right"
+      :style="{ width: '80%', height: '100%' }"
+    >
+      <div class="history-panel">
+        <div class="history-header">
+          <span>对话历史</span>
+          <van-icon name="cross" @click="showHistoryPopup = false" />
+        </div>
+        <div v-if="historyList.length === 0" class="history-empty">暂无历史对话</div>
+        <div
+          v-for="conv in historyList"
+          :key="conv.id"
+          class="history-item"
+          :class="{ active: String(conv.id) === String(conversationId) }"
+          @click="switchConversation(conv.id)"
+        >
+          <div class="history-title">{{ conv.title || '未命名对话' }}</div>
+          <div class="history-meta">
+            {{ conv.message_count }} 条消息 · {{ formatTime(conv.updated_at) }}
+          </div>
+        </div>
+        <div class="history-actions">
+          <van-button type="primary" block @click="startNewConversation"> + 开启新对话 </van-button>
+        </div>
+      </div>
+    </van-popup>
   </div>
 </template>
 
@@ -166,8 +263,23 @@ onMounted(initChat)
   color: #1a1a2e;
 }
 
+.nav-title-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .nav-placeholder {
   width: 44px;
+}
+
+.history-icon {
+  font-size: 20px;
+  color: var(--color-text-secondary, #666);
+  cursor: pointer;
+  padding: 6px;
 }
 
 .message-list {
@@ -286,5 +398,60 @@ onMounted(initChat)
 
 .send-btn:disabled {
   background: #c5c8fb;
+}
+
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #fff;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  font-size: 16px;
+  font-weight: 500;
+  border-bottom: 0.5px solid #eee;
+}
+
+.history-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+}
+
+.history-item {
+  padding: 14px 16px;
+  border-bottom: 0.5px solid #eee;
+  cursor: pointer;
+}
+
+.history-item:hover {
+  background: #f8f8fa;
+}
+
+.history-item.active {
+  background: #eeedfe;
+}
+
+.history-title {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.history-meta {
+  font-size: 12px;
+  color: #999;
+}
+
+.history-actions {
+  padding: 16px;
+  border-top: 0.5px solid #eee;
 }
 </style>
