@@ -1,12 +1,13 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { showToast } from 'vant'
+import { showDialog, showToast } from 'vant'
 import { use } from 'echarts/core'
 import { PieChart } from 'echarts/charts'
 import { GraphicComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
+import { checkAnomaly } from '@/api/agent.js'
 import { getBudgets } from '@/api/budget'
 import { getTransactions } from '@/api/transaction'
 import { useAuthStore } from '@/stores/auth'
@@ -28,6 +29,10 @@ const authStore = useAuthStore()
 const txStore = useTransactionsStore()
 const previousMonthExpense = ref(0)
 const monthlyBudget = ref(null)
+const anomalyData = ref(null)
+const anomalyLoading = ref(false)
+const anomalyDismissed = ref(false)
+const ACK_KEY = 'acked_anomaly_transactions'
 
 const CATEGORY_COLORS = {
   餐饮: '#6E73F2',
@@ -38,6 +43,21 @@ const CATEGORY_COLORS = {
   娱乐: '#ef4444',
   医疗: '#14b8a6',
   其他: '#94a3b8',
+}
+
+function getAckedIds() {
+  try {
+    const raw = localStorage.getItem(ACK_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch (e) {
+    return []
+  }
+}
+
+function addAckedIds(ids) {
+  const current = getAckedIds()
+  const merged = [...new Set([...current, ...ids])]
+  localStorage.setItem(ACK_KEY, JSON.stringify(merged))
 }
 
 function toMonthParam(date) {
@@ -123,6 +143,61 @@ async function loadMonthlyStats() {
 
 onMounted(loadMonthlyStats)
 
+onMounted(async () => {
+  anomalyLoading.value = true
+  try {
+    const { data } = await checkAnomaly(1, 7)
+    if (data.has_anomaly && data.anomalies.length > 0) {
+      const ackedIds = getAckedIds()
+      const filtered = data.anomalies.filter(
+        (anomaly) => !ackedIds.includes(anomaly.transaction_id),
+      )
+
+      if (filtered.length > 0) {
+        anomalyData.value = {
+          ...data,
+          anomalies: filtered,
+          summary: `最近7天发现 ${filtered.length} 笔异常消费`,
+        }
+      }
+    }
+  } catch (err) {
+    console.error('异常检测调用失败:', err)
+  } finally {
+    anomalyLoading.value = false
+  }
+})
+
+function showAnomalyDetail() {
+  const details = anomalyData.value.anomalies
+    .map(
+      (anomaly) =>
+        `• ${anomaly.category} ¥${anomaly.amount} (${anomaly.merchant})\n  ${anomaly.reason}`,
+    )
+    .join('\n\n')
+
+  showDialog({
+    title: '⚠️ 异常消费详情',
+    message: details,
+    confirmButtonText: '我知道了',
+    messageAlign: 'left',
+  }).then(() => {
+    if (anomalyData.value) {
+      const ids = anomalyData.value.anomalies.map((anomaly) => anomaly.transaction_id)
+      addAckedIds(ids)
+    }
+    anomalyDismissed.value = true
+  })
+}
+
+function dismissAnomaly() {
+  if (anomalyData.value) {
+    const ids = anomalyData.value.anomalies.map((anomaly) => anomaly.transaction_id)
+    addAckedIds(ids)
+  }
+  anomalyDismissed.value = true
+}
+
 const categoryBreakdown = computed(() => {
   const totals = {}
   txStore.currentMonth
@@ -202,11 +277,21 @@ const pieOption = computed(() => {
 })
 
 const pieCategories = computed(() => categoryBreakdown.value.items)
-
 </script>
 
 <template>
   <div class="page">
+    <transition name="slide-down">
+      <div v-if="anomalyData && !anomalyDismissed" class="anomaly-alert" @click="showAnomalyDetail">
+        <div class="anomaly-icon">⚠️</div>
+        <div class="anomaly-content">
+          <div class="anomaly-title">AI 发现 {{ anomalyData.anomalies.length }} 笔异常消费</div>
+          <div class="anomaly-summary">{{ anomalyData.summary }}</div>
+        </div>
+        <div class="anomaly-close" @click.stop="dismissAnomaly">×</div>
+      </div>
+    </transition>
+
     <!-- Header -->
     <div class="header">
       <div>
@@ -219,7 +304,15 @@ const pieCategories = computed(() => categoryBreakdown.value.items)
     <!-- Monthly Spend Card -->
     <div class="spend-card">
       <p class="card-label">本月已支出</p>
-      <h1 class="spend-amount">¥ {{ currentMonthExpense.toLocaleString('zh', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }}</h1>
+      <h1 class="spend-amount">
+        ¥
+        {{
+          currentMonthExpense.toLocaleString('zh', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })
+        }}
+      </h1>
       <p :class="['spend-compare', monthlyCompare.trend]">{{ monthlyCompare.text }}</p>
       <div v-if="monthlyBudget" class="budget-row">
         <span>预算 ¥{{ monthlyBudgetAmount.toFixed(0) }}</span>
@@ -288,6 +381,83 @@ const pieCategories = computed(() => categoryBreakdown.value.items)
   padding: 0 16px 16px;
   background: #f3f4f8;
   min-height: 100%;
+}
+
+.anomaly-alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a5a 100%);
+  color: white;
+  padding: 14px 16px;
+  border-radius: 12px;
+  margin: 12px 16px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(238, 90, 90, 0.25);
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+
+.anomaly-alert:active {
+  transform: scale(0.98);
+  box-shadow: 0 2px 8px rgba(238, 90, 90, 0.2);
+}
+
+.anomaly-icon {
+  font-size: 24px;
+}
+
+.anomaly-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.anomaly-title {
+  font-size: 15px;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.anomaly-summary {
+  font-size: 13px;
+  opacity: 0.92;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+.anomaly-close {
+  font-size: 22px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.anomaly-close:hover {
+  opacity: 1;
+}
+
+.slide-down-enter-active,
+.slide-down-leave-active {
+  transition: all 0.3s ease;
+}
+
+.slide-down-enter-from {
+  transform: translateY(-20px);
+  opacity: 0;
+}
+
+.slide-down-leave-to {
+  transform: translateY(-20px);
+  opacity: 0;
 }
 
 .header {

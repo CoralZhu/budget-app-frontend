@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { showConfirmDialog, showToast } from 'vant'
 import { deleteBudget, getBudgets, upsertBudget } from '@/api/budget'
@@ -11,10 +11,15 @@ import { getCurrentYearMonth } from '@/utils/date'
 const router = useRouter()
 const catStore = useCategoriesStore()
 
-const currentYearMonth = getCurrentYearMonth()
+const minMonthDate = new Date(2020, 0, 1)
+const maxMonthDate = new Date(2035, 11, 1)
+const yearMonth = ref(getCurrentYearMonth())
 const budgets = ref([])
 const monthlyTransactions = ref([])
 const editingTotal = ref('')
+const loading = ref(false)
+const showMonthPicker = ref(false)
+const monthPickerValue = ref(toMonthPickerValue(yearMonth.value))
 const showCategorySheet = ref(false)
 const showAmountDialog = ref(false)
 const selectedCategory = ref(null)
@@ -80,6 +85,61 @@ const categoryActions = computed(() =>
 
 const amountDialogTitle = computed(() => (editingBudget.value ? '修改分类预算' : '设置分类预算'))
 
+const monthTitle = computed(() => {
+  const [year, month] = yearMonth.value.split('-')
+  return `${year} 年 ${month} 月`
+})
+
+const isCurrentMonth = computed(() => yearMonth.value === getCurrentYearMonth())
+
+const canPrevMonth = computed(() => yearMonth.value > formatYearMonth(minMonthDate))
+
+const canNextMonth = computed(() => yearMonth.value < formatYearMonth(maxMonthDate))
+
+const hasAnyBudget = computed(() => budgets.value.length > 0)
+
+function padMonth(value) {
+  return String(value).padStart(2, '0')
+}
+
+function formatYearMonth(date) {
+  return `${date.getFullYear()}-${padMonth(date.getMonth() + 1)}`
+}
+
+function parseYearMonth(value) {
+  const [year, month] = value.split('-').map(Number)
+  return new Date(year, month - 1, 1)
+}
+
+function toMonthPickerValue(value) {
+  const [year, month] = value.split('-')
+  return [year, month]
+}
+
+function shiftMonth(delta) {
+  const date = parseYearMonth(yearMonth.value)
+  date.setMonth(date.getMonth() + delta)
+  const nextYearMonth = formatYearMonth(date)
+  if (
+    nextYearMonth < formatYearMonth(minMonthDate) ||
+    nextYearMonth > formatYearMonth(maxMonthDate)
+  ) {
+    return
+  }
+  yearMonth.value = nextYearMonth
+}
+
+function openMonthPicker() {
+  monthPickerValue.value = toMonthPickerValue(yearMonth.value)
+  showMonthPicker.value = true
+}
+
+function confirmMonthPicker() {
+  const [year, month] = monthPickerValue.value
+  yearMonth.value = `${year}-${month}`
+  showMonthPicker.value = false
+}
+
 function unwrapList(response) {
   const data = response.data
   if (Array.isArray(data)) return data
@@ -97,11 +157,12 @@ function normalizeTransaction(tx) {
   }
 }
 
-async function loadPageData() {
+async function fetchBudgets() {
   try {
+    loading.value = true
     const [budgetRes, txRes] = await Promise.all([
-      getBudgets(currentYearMonth),
-      getTransactions({ month: currentYearMonth }),
+      getBudgets(yearMonth.value),
+      getTransactions({ month: yearMonth.value }),
     ])
 
     budgets.value = unwrapList(budgetRes).map((budget) => ({
@@ -113,6 +174,8 @@ async function loadPageData() {
     editingTotal.value = totalBudget.value ? String(totalBudgetAmount.value) : ''
   } catch (error) {
     showToast(error.response?.data?.message || '获取预算失败')
+  } finally {
+    loading.value = false
   }
 }
 
@@ -125,8 +188,8 @@ async function saveTotalBudget(shouldBack = false) {
 
   try {
     savingTotal.value = true
-    await upsertBudget({ yearMonth: currentYearMonth, amount })
-    await loadPageData()
+    await upsertBudget({ yearMonth: yearMonth.value, amount })
+    await fetchBudgets()
     showToast({ message: '已保存', icon: 'success' })
     if (shouldBack) router.back()
   } catch (error) {
@@ -165,12 +228,12 @@ async function saveCategoryBudget() {
 
   try {
     await upsertBudget({
-      yearMonth: currentYearMonth,
+      yearMonth: yearMonth.value,
       category: selectedCategory.value.name,
       amount,
     })
     showAmountDialog.value = false
-    await loadPageData()
+    await fetchBudgets()
     showToast({ message: '已添加', icon: 'success' })
   } catch (error) {
     showToast(error.response?.data?.message || '保存分类预算失败')
@@ -185,7 +248,7 @@ async function removeBudget(budget, shouldCloseDialog = false) {
     })
     await deleteBudget(budget.id)
     if (shouldCloseDialog) showAmountDialog.value = false
-    await loadPageData()
+    await fetchBudgets()
     showToast({ message: '已删除', icon: 'success' })
   } catch (error) {
     if (error !== 'cancel') {
@@ -214,7 +277,16 @@ function isOverBudget(cat) {
   return cat.spentAmount > cat.amount
 }
 
-onMounted(loadPageData)
+function goToAIChat() {
+  router.push({
+    path: '/budget-chat',
+    query: { yearMonth: yearMonth.value },
+  })
+}
+
+watch(yearMonth, fetchBudgets)
+
+onMounted(fetchBudgets)
 </script>
 
 <template>
@@ -225,68 +297,123 @@ onMounted(loadPageData)
       <span class="nav-action" @click="saveTotalBudget(true)">保存</span>
     </div>
 
-    <div class="total-card">
-      <p class="total-label">月度总预算</p>
-      <div class="total-row">
-        <span class="currency">¥</span>
-        <input
-          v-model="editingTotal"
-          type="number"
-          class="total-input"
-          inputmode="decimal"
-          placeholder="0"
-          :disabled="savingTotal"
-          @blur="saveTotalBudget(false)"
-        />
-        <span class="per-month">/月</span>
-      </div>
-      <div class="usage-pill">
-        已使用 {{ usagePercent }}%，还可花 ¥{{ remaining.toFixed(2) }}
-      </div>
-    </div>
-
-    <div class="section-header">
-      <span class="section-title">分类预算</span>
-      <span class="link-btn" @click="showCategorySheet = true">添加</span>
-    </div>
-
-    <div class="card">
-      <van-empty v-if="categoryBudgets.length === 0" description="暂无分类预算" />
-      <div
-        v-for="(cat, i) in categoryBudgets"
-        :key="cat.id"
-        class="cat-row"
-        :class="{ last: i === categoryBudgets.length - 1 }"
+    <div class="month-switcher">
+      <button
+        type="button"
+        class="month-arrow"
+        :class="{ disabled: !canPrevMonth }"
+        :disabled="!canPrevMonth"
+        @click="shiftMonth(-1)"
       >
-        <div class="cat-header">
-          <div class="cat-icon" :style="{ background: cat.bg }">{{ cat.icon }}</div>
-          <div class="cat-info">
-            <span class="cat-name">{{ cat.category }}</span>
-            <span :class="['cat-amounts', { over: isOverBudget(cat) }]">
-              已用¥{{ cat.spentAmount.toFixed(2) }} / 预算¥{{ cat.amount.toFixed(2) }}
-            </span>
-          </div>
-          <van-icon
-            name="edit"
-            size="20"
-            color="#9ca3af"
-            class="edit-icon"
-            @click="openEditCategoryBudget(cat)"
-          />
-        </div>
-        <van-progress
-          :percentage="progressWidth(cat)"
-          :show-pivot="false"
-          stroke-width="6"
-          :color="progressColor(cat)"
-          track-color="#f3f4f6"
-          style="margin-top: 10px"
-        />
-        <p v-if="isOverBudget(cat)" class="over-text">
-          已超支 ¥{{ (cat.spentAmount - cat.amount).toFixed(0) }}
-        </p>
-      </div>
+        <van-icon name="arrow-left" size="18" />
+      </button>
+      <button
+        type="button"
+        class="month-display"
+        :class="{ current: isCurrentMonth }"
+        @click="openMonthPicker"
+      >
+        {{ monthTitle }}
+      </button>
+      <button
+        type="button"
+        class="month-arrow"
+        :class="{ disabled: !canNextMonth }"
+        :disabled="!canNextMonth"
+        @click="shiftMonth(1)"
+      >
+        <van-icon name="arrow" size="18" />
+      </button>
     </div>
+
+    <div v-if="loading" class="loading-state">加载中...</div>
+
+    <template v-else>
+      <div class="total-card">
+        <p class="total-label">月度总预算</p>
+        <div class="total-row">
+          <span class="currency">¥</span>
+          <input
+            v-model="editingTotal"
+            type="number"
+            class="total-input"
+            inputmode="decimal"
+            placeholder="0"
+            :disabled="savingTotal"
+            @blur="saveTotalBudget(false)"
+          />
+          <span class="per-month">/月</span>
+        </div>
+        <div class="usage-pill">已使用 {{ usagePercent }}%，还可花 ¥{{ remaining.toFixed(2) }}</div>
+      </div>
+
+      <div v-if="!hasAnyBudget" class="empty-budget-card">
+        <p>该月暂无预算方案。你可以手动设置，或使用 AI 预算规划 Agent 自动生成。</p>
+        <div class="empty-actions">
+          <button type="button" class="empty-ai-btn" @click="goToAIChat">让 AI 帮我规划</button>
+          <button type="button" class="empty-add-btn" @click="showCategorySheet = true">
+            添加预算
+          </button>
+        </div>
+      </div>
+
+      <template v-else>
+        <div class="section-header">
+          <span class="section-title">分类预算</span>
+          <span class="link-btn" @click="showCategorySheet = true">添加</span>
+        </div>
+
+        <div class="card">
+          <van-empty v-if="categoryBudgets.length === 0" description="暂无分类预算" />
+          <div
+            v-for="(cat, i) in categoryBudgets"
+            :key="cat.id"
+            class="cat-row"
+            :class="{ last: i === categoryBudgets.length - 1 }"
+          >
+            <div class="cat-header">
+              <div class="cat-icon" :style="{ background: cat.bg }">{{ cat.icon }}</div>
+              <div class="cat-info">
+                <span class="cat-name">{{ cat.category }}</span>
+                <span :class="['cat-amounts', { over: isOverBudget(cat) }]">
+                  已用¥{{ cat.spentAmount.toFixed(2) }} / 预算¥{{ cat.amount.toFixed(2) }}
+                </span>
+              </div>
+              <van-icon
+                name="edit"
+                size="20"
+                color="#9ca3af"
+                class="edit-icon"
+                @click="openEditCategoryBudget(cat)"
+              />
+            </div>
+            <van-progress
+              :percentage="progressWidth(cat)"
+              :show-pivot="false"
+              stroke-width="6"
+              :color="progressColor(cat)"
+              track-color="#f3f4f6"
+              style="margin-top: 10px"
+            />
+            <p v-if="isOverBudget(cat)" class="over-text">
+              已超支 ¥{{ (cat.spentAmount - cat.amount).toFixed(0) }}
+            </p>
+          </div>
+        </div>
+      </template>
+    </template>
+
+    <van-popup v-model:show="showMonthPicker" round position="bottom" class="month-picker-popup">
+      <van-date-picker
+        v-model="monthPickerValue"
+        title="选择预算月份"
+        :columns-type="['year', 'month']"
+        :min-date="minMonthDate"
+        :max-date="maxMonthDate"
+        @confirm="confirmMonthPicker"
+        @cancel="showMonthPicker = false"
+      />
+    </van-popup>
 
     <div v-if="showCategorySheet" class="page-sheet">
       <div class="page-sheet-mask" @click="showCategorySheet = false"></div>
@@ -364,6 +491,100 @@ onMounted(loadPageData)
   color: #6e73f2;
   font-weight: 500;
   cursor: pointer;
+}
+
+.month-switcher {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+}
+
+.month-arrow,
+.month-display {
+  height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+}
+
+.month-arrow {
+  color: #6e73f2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.month-arrow.disabled {
+  color: #c5cad5;
+  background: #eef0f5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.month-display {
+  color: #374151;
+  font-size: 16px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.month-display.current {
+  color: #6e73f2;
+  border-color: rgba(110, 115, 242, 0.35);
+}
+
+.loading-state,
+.empty-budget-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 24px 18px;
+  text-align: center;
+  color: #6b7280;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+.loading-state {
+  margin-top: 14px;
+}
+
+.empty-budget-card {
+  margin-top: -6px;
+}
+
+.empty-budget-card p {
+  line-height: 1.6;
+}
+
+.empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.empty-ai-btn,
+.empty-add-btn {
+  width: 140px;
+  height: 42px;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.empty-ai-btn {
+  background: #6e73f2;
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(110, 115, 242, 0.22);
+}
+
+.empty-add-btn {
+  background: #eef0ff;
+  color: #6e73f2;
 }
 
 .total-card {
@@ -589,5 +810,10 @@ onMounted(loadPageData)
   color: #6b7280;
   margin-top: 2px;
   margin-bottom: 0;
+}
+
+:deep(.month-picker-popup) {
+  left: max(0px, calc((100vw - 480px) / 2));
+  width: min(100vw, 480px);
 }
 </style>

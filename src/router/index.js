@@ -30,6 +30,11 @@ const router = createRouter({
       component: () => import('@/views/EditTransactionView.vue'),
     },
     { path: '/budget', name: 'budget', component: () => import('@/views/BudgetView.vue') },
+    {
+      path: '/budget-chat',
+      name: 'BudgetChat',
+      component: () => import('@/views/BudgetChatView.vue'),
+    },
     { path: '/category', name: 'category', component: () => import('@/views/CategoryView.vue') },
     { path: '/import', name: 'import', component: () => import('@/views/ImportView.vue') },
     {
