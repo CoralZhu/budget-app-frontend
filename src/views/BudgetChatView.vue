@@ -2,6 +2,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast } from 'vant'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import {
   continueBudgetChat,
   getConversationDetail,
@@ -12,6 +14,11 @@ import {
 const route = useRoute()
 const router = useRouter()
 
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+})
+
 const messages = ref([])
 const inputText = ref('')
 const isLoading = ref(false)
@@ -20,15 +27,66 @@ const bottomRef = ref(null)
 const conversationId = ref(null)
 const showHistoryPopup = ref(false)
 const historyList = ref([])
+const toolCallsInProgress = ref([])
 
 const visibleMessages = computed(() =>
   messages.value.filter((message) => {
-    return (message.role === 'user' || message.role === 'assistant') && message.content
+    return (
+      (message.role === 'user' || message.role === 'assistant') &&
+      (message.content || message._streaming)
+    )
   }),
 )
 
+const showGlobalLoading = computed(
+  () => isLoading.value && !messages.value.some((message) => message._streaming),
+)
+
+async function* parseSSEStream(response) {
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const events = buffer.split('\n\n')
+    buffer = events.pop()
+
+    for (const eventText of events) {
+      if (!eventText.trim()) continue
+
+      const lines = eventText.split('\n')
+      let eventType = 'message'
+      let data = ''
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          data = line.slice(6)
+        }
+      }
+
+      try {
+        yield { type: eventType, data: JSON.parse(data) }
+      } catch (error) {
+        console.error('SSE parse error:', error, data)
+      }
+    }
+  }
+}
+
 function unwrapData(response) {
   return response.data?.data || response.data || {}
+}
+
+function renderMarkdown(text) {
+  if (!text) return ''
+  const html = marked.parse(text)
+  return DOMPurify.sanitize(html)
 }
 
 function getErrorMessage(error) {
@@ -78,31 +136,112 @@ async function sendMessage() {
   if (!content || isLoading.value) return
 
   messages.value.push({ role: 'user', content })
+  const assistantIndex = messages.value.length
+  messages.value.push({ role: 'assistant', content: '', _streaming: true })
   inputText.value = ''
-  loadingText.value = '🔧 AI 正在查询数据...'
+  isLoading.value = true
+  toolCallsInProgress.value = []
   await scrollToBottom()
 
   try {
-    isLoading.value = true
-    const response = await continueBudgetChat(1, messages.value, conversationId.value)
-    const data = unwrapData(response)
-    if (Array.isArray(data.messages)) {
-      messages.value = data.messages
-    }
-    conversationId.value = data.conversation_id || conversationId.value
-    await scrollToBottom()
+    const response = await fetch('http://localhost:8001/api/agent/budget/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: 1,
+        messages: messages.value.slice(0, -1).filter((message) => !message._streaming),
+        conversation_id: conversationId.value,
+      }),
+    })
 
-    if (data.budget_saved) {
-      showToast({ message: '✅ 预算已保存成功！', type: 'success' })
-      window.setTimeout(() => {
-        router.push('/budget')
-      }, 2000)
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    for await (const event of parseSSEStream(response)) {
+      switch (event.type) {
+        case 'start':
+          conversationId.value = event.data.conversation_id
+          router.replace({
+            path: '/budget-chat',
+            query: { conversationId: event.data.conversation_id },
+          })
+          break
+
+        case 'tool_call':
+          toolCallsInProgress.value.push(event.data.name)
+          messages.value[assistantIndex].content = `🔧 正在查询: ${event.data.name}...`
+          await scrollToBottom()
+          break
+
+        case 'tool_result':
+          toolCallsInProgress.value = toolCallsInProgress.value.filter(
+            (name) => name !== event.data.name,
+          )
+          messages.value[assistantIndex].content = '✅ 数据获取完成，正在分析...'
+          await scrollToBottom()
+          break
+
+        case 'text':
+          if (
+            messages.value[assistantIndex].content.startsWith('🔧') ||
+            messages.value[assistantIndex].content.startsWith('✅')
+          ) {
+            messages.value[assistantIndex].content = ''
+          }
+          messages.value[assistantIndex].content += event.data.chunk
+          await scrollToBottom()
+          break
+
+        case 'done':
+          if (event.data.budget_saved) {
+            showToast({ message: '✅ 预算已保存成功！', type: 'success' })
+            window.setTimeout(() => {
+              router.push('/budget')
+            }, 2000)
+          }
+          break
+
+        case 'final':
+          delete messages.value[assistantIndex]._streaming
+          messages.value = event.data.messages
+          conversationId.value = event.data.conversation_id
+          break
+
+        case 'error':
+          messages.value[assistantIndex].content = `❌ ${event.data.message}`
+          break
+      }
     }
   } catch (error) {
-    console.error('AI 请求失败:', error)
-    showToast(getErrorMessage(error))
+    console.error('流式请求失败:', error)
+
+    try {
+      const response = await continueBudgetChat(
+        1,
+        messages.value.slice(0, -1).filter((message) => !message._streaming),
+        conversationId.value,
+      )
+      const data = unwrapData(response)
+      if (Array.isArray(data.messages)) {
+        messages.value = data.messages
+      }
+      conversationId.value = data.conversation_id || conversationId.value
+
+      if (data.budget_saved) {
+        showToast({ message: '✅ 预算已保存成功！', type: 'success' })
+        window.setTimeout(() => {
+          router.push('/budget')
+        }, 2000)
+      }
+    } catch (fallbackError) {
+      console.error('AI 请求失败:', fallbackError)
+      messages.value[assistantIndex].content = '❌ AI 请求失败，请稍后重试'
+      showToast('AI 请求失败')
+    }
   } finally {
     isLoading.value = false
+    toolCallsInProgress.value = []
     await scrollToBottom()
   }
 }
@@ -168,10 +307,20 @@ onMounted(initChat)
         class="message-row"
         :class="message.role"
       >
-        <div class="message-bubble">{{ message.content }}</div>
+        <div
+          v-if="message.content && message.role === 'assistant'"
+          class="message-bubble markdown-body"
+          v-html="renderMarkdown(message.content)"
+        ></div>
+        <div v-else-if="message.content" class="message-bubble">{{ message.content }}</div>
+        <div v-else class="message-bubble typing">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
       </div>
 
-      <div v-if="isLoading" class="loading-row">
+      <div v-if="showGlobalLoading" class="loading-row">
         <div class="loading-bubble">
           <van-loading size="18" color="#6e73f2" />
           <span>{{ loadingText }}</span>
@@ -324,6 +473,126 @@ onMounted(initChat)
   background: #6e73f2;
   color: #fff;
   border-top-right-radius: 6px;
+}
+
+.markdown-body {
+  white-space: normal;
+}
+
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3) {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 12px 0 6px;
+  color: var(--color-text-primary, #333);
+}
+
+.markdown-body :deep(p) {
+  margin: 6px 0;
+  line-height: 1.6;
+}
+
+.markdown-body :deep(p:first-child),
+.markdown-body :deep(h1:first-child),
+.markdown-body :deep(h2:first-child),
+.markdown-body :deep(h3:first-child) {
+  margin-top: 0;
+}
+
+.markdown-body :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-body :deep(strong) {
+  font-weight: 600;
+  color: #5b54d6;
+}
+
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.markdown-body :deep(li) {
+  margin: 3px 0;
+}
+
+.markdown-body :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 0.5px solid #e0e0e0;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.markdown-body :deep(th) {
+  background: #f5f5f7;
+  font-weight: 500;
+}
+
+.markdown-body :deep(code) {
+  background: rgba(0, 0, 0, 0.04);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 12px;
+}
+
+.markdown-body :deep(hr) {
+  border: none;
+  border-top: 0.5px solid #e0e0e0;
+  margin: 12px 0;
+}
+
+.markdown-body :deep(blockquote) {
+  border-left: 3px solid #6e73f2;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #666;
+}
+
+.typing {
+  padding: 12px 16px;
+}
+
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 2px;
+  background: #999;
+  border-radius: 50%;
+  animation: typing 1.4s infinite;
+}
+
+.dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
 }
 
 .loading-row {
