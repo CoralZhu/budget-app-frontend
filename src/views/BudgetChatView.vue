@@ -109,7 +109,7 @@ async function initChat() {
     const queryConvId = route.query.conversationId
     const response = queryConvId
       ? await getConversationDetail(queryConvId)
-      : await startBudgetChat(1)
+      : await startBudgetChat()
     const data = unwrapData(response)
 
     messages.value = Array.isArray(data.messages) ? data.messages : []
@@ -144,11 +144,14 @@ async function sendMessage() {
   await scrollToBottom()
 
   try {
-    const response = await fetch('http://localhost:8001/api/agent/budget/chat/stream', {
+    const token = localStorage.getItem('token')
+    const response = await fetch(`${import.meta.env.VITE_AGENT_BASE_URL}/api/agent/budget/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({
-        user_id: 1,
         messages: messages.value.slice(0, -1).filter((message) => !message._streaming),
         conversation_id: conversationId.value,
       }),
@@ -218,7 +221,6 @@ async function sendMessage() {
 
     try {
       const response = await continueBudgetChat(
-        1,
         messages.value.slice(0, -1).filter((message) => !message._streaming),
         conversationId.value,
       )
@@ -250,7 +252,7 @@ watch(showHistoryPopup, async (val) => {
   if (!val) return
 
   try {
-    const response = await listConversations(1, 'budget_planner')
+    const response = await listConversations('budget_planner')
     const data = unwrapData(response)
     historyList.value = Array.isArray(data) ? data : []
   } catch (error) {

@@ -146,7 +146,7 @@ onMounted(loadMonthlyStats)
 onMounted(async () => {
   anomalyLoading.value = true
   try {
-    const { data } = await checkAnomaly(1, 7)
+    const { data } = await checkAnomaly(7)
     if (data.has_anomaly && data.anomalies.length > 0) {
       const ackedIds = getAckedIds()
       const filtered = data.anomalies.filter(
@@ -196,6 +196,14 @@ function dismissAnomaly() {
     addAckedIds(ids)
   }
   anomalyDismissed.value = true
+}
+
+function goToAIChat() {
+  router.push('/budget-chat')
+}
+
+function goToBudget() {
+  router.push('/budget')
 }
 
 const categoryBreakdown = computed(() => {
@@ -298,11 +306,14 @@ const pieCategories = computed(() => categoryBreakdown.value.items)
         <p class="greeting">{{ authStore.greeting }} 👋</p>
         <h2 class="username">{{ authStore.user.username }}</h2>
       </div>
-      <van-icon name="setting-o" size="22" color="#6b7280" />
+      <div class="ai-entry" @click="goToAIChat">
+        <van-icon name="chat-o" size="18" color="#6E73F2" />
+        <span class="ai-label">AI 助手</span>
+      </div>
     </div>
 
     <!-- Monthly Spend Card -->
-    <div class="spend-card">
+    <div class="spend-card clickable-card" @click="goToBudget">
       <p class="card-label">本月已支出</p>
       <h1 class="spend-amount">
         ¥
@@ -478,12 +489,59 @@ const pieCategories = computed(() => categoryBreakdown.value.items)
   font-weight: 700;
 }
 
+.ai-entry {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: linear-gradient(135deg, #eeedfe 0%, #ddd9fc 100%);
+  padding: 7px 13px;
+  border-radius: 18px;
+  cursor: pointer;
+  transition: all 0.18s;
+  user-select: none;
+  border: 0.5px solid rgba(110, 115, 242, 0.25);
+  box-shadow: 0 2px 6px rgba(110, 115, 242, 0.12);
+}
+
+.ai-entry:hover {
+  background: linear-gradient(135deg, #e2dffe 0%, #cfc9fa 100%);
+  box-shadow: 0 3px 10px rgba(110, 115, 242, 0.2);
+  transform: translateY(-1px);
+}
+
+.ai-entry:active {
+  transform: scale(0.96) translateY(0);
+}
+
+.ai-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #5550c8;
+  letter-spacing: 0.2px;
+}
+
 .spend-card {
   background: linear-gradient(135deg, #6b6ef5 0%, #8b8ff8 100%);
   border-radius: 20px;
   padding: 20px 20px 22px;
   color: white;
   margin-bottom: 16px;
+}
+
+.clickable-card {
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.clickable-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(110, 115, 242, 0.25);
+}
+
+.clickable-card:active {
+  transform: translateY(0) scale(0.99);
 }
 
 .card-label {

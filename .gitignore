@@ -37,3 +37,12 @@ __screenshots__/
 
 # Vite
 *.timestamp-*-*.mjs
+
+# Local env (not committed)
+.env.development
+.env.development.backup
+.env.local
+.env.*.local
+
+# 但 .env.production 是部署需要的，必须提交
+# 所以不能写 .env*（那会把 production 也排除掉）

@@ -4,7 +4,7 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     // 未登录区
-    { path: '/', name: 'splash', component: () => import('@/views/SplashView.vue') },
+    { path: '/', name: 'DemoLogin', component: () => import('@/views/DemoLoginView.vue') },
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },
     { path: '/register', name: 'register', component: () => import('@/views/RegisterView.vue') },
 
