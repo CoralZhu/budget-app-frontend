@@ -775,118 +775,120 @@ onUnmounted(() => {
   <div class="page">
     <!-- ========== MANUAL MODE ========== -->
     <template v-if="mode === 'manual'">
-      <div class="nav-bar">
-        <button class="nav-icon-btn" @click="handleBack">
-          <van-icon name="arrow-left" size="22" />
-        </button>
-        <span class="nav-title">记一笔 ✏️</span>
-        <span
-          :class="['nav-action', { disabled: manualSaving }]"
-          @click="saveManual"
-        >
-          {{ manualSaving ? '保存中...' : '保存' }}
-        </span>
-      </div>
-
-      <div class="card">
-        <div class="type-toggle">
-          <button :class="['type-btn', { active: txType === 'expense' }]" @click="txType = 'expense'">
-            支出
+      <div class="manual-form">
+        <div class="nav-bar">
+          <button class="nav-icon-btn" @click="handleBack">
+            <van-icon name="arrow-left" size="22" />
           </button>
-          <button :class="['type-btn income', { active: txType === 'income' }]" @click="txType = 'income'">
-            收入
-          </button>
-        </div>
-        <p class="amount-label">金额</p>
-        <div class="amount-row">
-          <span class="currency">¥</span>
-          <input
-            v-model="amountStr"
-            type="text"
-            class="amount-input"
-            placeholder="0.00"
-            inputmode="decimal"
-          />
-        </div>
-      </div>
-
-      <div class="card">
-        <p class="field-label">选择分类</p>
-        <div class="cat-grid">
-          <div
-            v-for="cat in visibleCategories"
-            :key="cat.id"
-            :class="['cat-item', { selected: selectedCategoryId === cat.id }]"
-            @click="selectedCategoryId = cat.id"
+          <span class="nav-title">记一笔 ✏️</span>
+          <span
+            :class="['nav-action', { disabled: manualSaving }]"
+            @click="saveManual"
           >
-            <div class="cat-icon" :style="{ background: cat.bg }">{{ cat.icon }}</div>
-            <span class="cat-name" :class="{ 'active-text': selectedCategoryId === cat.id }">
-              {{ cat.name }}
-            </span>
+            {{ manualSaving ? '保存中...' : '保存' }}
+          </span>
+        </div>
+
+        <div class="card">
+          <div class="type-toggle">
+            <button :class="['type-btn', { active: txType === 'expense' }]" @click="txType = 'expense'">
+              支出
+            </button>
+            <button :class="['type-btn income', { active: txType === 'income' }]" @click="txType = 'income'">
+              收入
+            </button>
           </div>
-          <div
-            v-if="hasMoreCategories"
-            class="cat-item"
-            @click="showAllCategories = !showAllCategories"
-          >
-            <div class="cat-icon" style="background: #f3f4f6">···</div>
-            <span class="cat-name">{{ showAllCategories ? '收起' : '更多' }}</span>
+          <p class="amount-label">金额</p>
+          <div class="amount-row">
+            <span class="currency">¥</span>
+            <input
+              v-model="amountStr"
+              type="text"
+              class="amount-input"
+              placeholder="0.00"
+              inputmode="decimal"
+            />
           </div>
         </div>
-      </div>
 
-      <div v-if="showCreateCategory" class="page-layer center">
-        <div class="page-layer-mask" @click="showCreateCategory = false"></div>
-        <div class="category-dialog">
-          <p class="category-dialog-title">新建分类</p>
+        <div class="card">
+          <p class="field-label">选择分类</p>
+          <div class="cat-grid">
+            <div
+              v-for="cat in visibleCategories"
+              :key="cat.id"
+              :class="['cat-item', { selected: selectedCategoryId === cat.id }]"
+              @click="selectedCategoryId = cat.id"
+            >
+              <div class="cat-icon" :style="{ background: cat.bg }">{{ cat.icon }}</div>
+              <span class="cat-name" :class="{ 'active-text': selectedCategoryId === cat.id }">
+                {{ cat.name }}
+              </span>
+            </div>
+            <div
+              v-if="hasMoreCategories"
+              class="cat-item"
+              @click="showAllCategories = !showAllCategories"
+            >
+              <div class="cat-icon" style="background: #f3f4f6">···</div>
+              <span class="cat-name">{{ showAllCategories ? '收起' : '更多' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="showCreateCategory" class="page-layer center">
+          <div class="page-layer-mask" @click="showCreateCategory = false"></div>
+          <div class="category-dialog">
+            <p class="category-dialog-title">新建分类</p>
+            <van-field
+              v-model="newCategoryName"
+              label="名称"
+              placeholder="例如: 早餐"
+              clearable
+            />
+            <van-field
+              v-model="newCategoryIcon"
+              label="图标"
+              placeholder="例如: 🥐"
+              maxlength="2"
+              clearable
+            />
+            <div class="category-dialog-actions">
+              <button type="button" class="dialog-cancel" @click="showCreateCategory = false">
+                取消
+              </button>
+              <button type="button" class="dialog-confirm" @click="createCategory">
+                创建
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card info-card">
           <van-field
-            v-model="newCategoryName"
-            label="名称"
-            placeholder="例如: 早餐"
+            :model-value="formatDisplayDate(spentAt)"
+            label="日期时间"
+            :border="false"
+            class="info-field"
+            readonly
+            is-link
+            @click="openDateTimePicker"
+          />
+          <van-field
+            v-model="merchant"
+            placeholder="商家（选填）"
+            :border="false"
+            class="info-field"
             clearable
           />
           <van-field
-            v-model="newCategoryIcon"
-            label="图标"
-            placeholder="例如: 🥐"
-            maxlength="2"
+            v-model="note"
+            placeholder="添加备注（选填）"
+            :border="false"
+            class="info-field"
             clearable
           />
-          <div class="category-dialog-actions">
-            <button type="button" class="dialog-cancel" @click="showCreateCategory = false">
-              取消
-            </button>
-            <button type="button" class="dialog-confirm" @click="createCategory">
-              创建
-            </button>
-          </div>
         </div>
-      </div>
-
-      <div class="card info-card">
-        <van-field
-          :model-value="formatDisplayDate(spentAt)"
-          label="日期时间"
-          :border="false"
-          class="info-field"
-          readonly
-          is-link
-          @click="openDateTimePicker"
-        />
-        <van-field
-          v-model="merchant"
-          placeholder="商家（选填）"
-          :border="false"
-          class="info-field"
-          clearable
-        />
-        <van-field
-          v-model="note"
-          placeholder="添加备注（选填）"
-          :border="false"
-          class="info-field"
-          clearable
-        />
       </div>
 
       <van-popup
@@ -1430,6 +1432,12 @@ onUnmounted(() => {
   padding: 16px;
   margin-bottom: 12px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+}
+
+.manual-form {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
 }
 
 /* Type toggle */
