@@ -56,7 +56,8 @@ const showTabbar = computed(() => route.name !== 'record')
 
 <style scoped>
 .layout {
-  height: 100vh;
+  height: 100dvh;
+  min-height: -webkit-fill-available;
   display: flex;
   flex-direction: column;
   background: #f3f4f8;
