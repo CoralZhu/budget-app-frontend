@@ -4,14 +4,16 @@
       <h1>🤖 AI Budget Assistant</h1>
       <p class="subtitle">Personal finance with AI-powered insights</p>
 
-      <div class="warning">
-        <strong>⚠️ Demo Mode</strong>
-        <p>This is a public demo with limited functionality. Spring Boot backend (transactions CRUD, user management) is not deployed in this preview. Only AI agent features are functional.</p>
-        <p><strong>Working:</strong> AI anomaly detection · AI budget planning chat (streaming)</p>
-        <p><strong>Not working:</strong> Adding transactions · Login · Real budget management</p>
+      <div class="info-card">
+        <strong>👋 Welcome</strong>
+        <p>Two ways to explore this app:</p>
+        <p><strong>Quick demo</strong> — Click "Enter Demo" below to instantly access a shared demo account (user_id=1, demo@example.com).</p>
+        <p><strong>Own account</strong> — Click "Sign up" to create your own account. No email verification needed in this preview.</p>
+        <p style="margin-top: 12px; font-size: 12px; color: #888;">All features are functional: AI anomaly detection · AI budget planning chat (streaming) · Transaction CRUD · OCR receipt recognition · Voice input · Categories · Budgets</p>
       </div>
 
-      <button @click="enterDemo" class="demo-btn">Enter Demo</button>
+      <button @click="enterDemo" class="demo-btn primary">Enter Demo (Shared Account)</button>
+      <button @click="goToRegister" class="demo-btn secondary">Sign Up (Your Own Account)</button>
 
       <div class="links">
         <a href="https://github.com/CoralZhu/budget-app-agent" target="_blank">View Agent Source on GitHub</a>
@@ -35,6 +37,10 @@ function enterDemo() {
   localStorage.setItem('token', demoToken)
 
   router.push('/app/home')
+}
+
+function goToRegister() {
+  router.push('/register')
 }
 </script>
 
@@ -67,34 +73,49 @@ function enterDemo() {
   margin: 0 0 24px;
 }
 
-.warning {
-  background: #FFF4E6;
-  border: 1px solid #FFE0B2;
+.info-card {
+  background: #F0F4FF;
+  border: 1px solid #C5D4F5;
   border-radius: 8px;
   padding: 16px;
   font-size: 13px;
-  color: #5D4037;
+  color: #2C3E50;
   margin-bottom: 20px;
   line-height: 1.5;
 }
 
-.warning strong { color: #E65100; }
-.warning p { margin: 6px 0; }
+.info-card strong { color: #2D55B0; }
+.info-card p { margin: 6px 0; }
 
 .demo-btn {
   width: 100%;
-  background: #6E73F2;
-  color: white;
   border: none;
   padding: 14px;
   border-radius: 10px;
   font-size: 15px;
   font-weight: 500;
   cursor: pointer;
-  transition: transform 0.1s;
+  transition: transform 0.1s, background 0.2s;
+  margin-bottom: 10px;
 }
 
-.demo-btn:hover { background: #5550C8; }
+.demo-btn.primary {
+  background: #6E73F2;
+  color: white;
+}
+
+.demo-btn.primary:hover { background: #5550C8; }
+
+.demo-btn.secondary {
+  background: white;
+  color: #6E73F2;
+  border: 1.5px solid #6E73F2;
+}
+
+.demo-btn.secondary:hover {
+  background: #F0F4FF;
+}
+
 .demo-btn:active { transform: scale(0.98); }
 
 .links {
