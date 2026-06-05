@@ -272,7 +272,8 @@ async function deleteTx() {
 
 <style scoped>
 .page {
-  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  min-height: 100dvh;
   background: #f3f4f8;
   padding: 0 16px 32px;
 }

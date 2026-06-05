@@ -102,7 +102,8 @@ async function handleLogin() {
 
 <style scoped>
 .page {
-  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  min-height: 100dvh;
   background: white;
   padding: 64px 28px 40px;
 }

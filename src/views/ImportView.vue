@@ -260,7 +260,8 @@ function viewTransactions() {
 
 <style scoped>
 .page {
-  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  min-height: 100dvh;
   padding: 0 16px 32px;
   background: #f3f4f8;
   color: #1f2338;

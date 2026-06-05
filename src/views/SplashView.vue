@@ -35,7 +35,8 @@ onMounted(() => {
 
 <style scoped>
 .splash {
-  height: 100vh;
+  height: 100dvh;
+  min-height: -webkit-fill-available;
   background: #6b6ef5;
   display: flex;
   flex-direction: column;

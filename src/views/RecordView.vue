@@ -1364,10 +1364,11 @@ onUnmounted(() => {
 
 <style scoped>
 .page {
-  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  min-height: 100dvh;
   background: #f3f4f8;
   padding: 0 16px;
-  padding-bottom: 80px;
+  padding-bottom: calc(88px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   position: relative;
@@ -2188,7 +2189,7 @@ onUnmounted(() => {
   border-top: 1px solid #f0f0f5;
   display: flex;
   align-items: center;
-  height: 64px;
+  height: calc(64px + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
 }
 
