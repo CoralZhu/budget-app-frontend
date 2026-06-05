@@ -1364,11 +1364,14 @@ onUnmounted(() => {
 
 <style scoped>
 .page {
+  height: 100dvh;
   min-height: -webkit-fill-available;
-  min-height: 100dvh;
   background: #f3f4f8;
   padding: 0 16px;
-  padding-bottom: calc(88px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   position: relative;
@@ -1625,11 +1628,11 @@ onUnmounted(() => {
 
 /* Photo viewfinder */
 .viewfinder {
-  flex: 1;
+  flex: 0 1 auto;
   background: #d0d0d8;
   border-radius: 20px;
   margin-bottom: 12px;
-  min-height: 280px;
+  min-height: clamp(180px, 38dvh, 280px);
   position: relative;
   display: flex;
   align-items: center;
@@ -1895,6 +1898,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-around;
   padding: 12px 0;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
 }
 
 .photo-act-btn {
@@ -2121,6 +2125,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
   padding: 16px 0;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
 }
 
 .rec-btn {
