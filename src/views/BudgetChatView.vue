@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { showToast } from 'vant'
 import { marked } from 'marked'
@@ -28,6 +28,10 @@ const conversationId = ref(null)
 const showHistoryPopup = ref(false)
 const historyList = ref([])
 const toolCallsInProgress = ref([])
+const voiceState = ref('idle') // 'idle' | 'listening' | 'processing'
+const isVoiceSupported = ref(true)
+
+const isRecording = computed(() => voiceState.value === 'listening')
 
 const visibleMessages = computed(() =>
   messages.value.filter((message) => {
@@ -277,6 +281,97 @@ function startNewConversation() {
   window.location.reload()
 }
 
+let SpeechRecognitionCtor = null
+let speechRecognition = null
+let finalVoiceText = ''
+let interimVoiceText = ''
+let voiceHadError = false
+
+function appendVoiceInput(text) {
+  const content = text.trim()
+  if (!content) return
+
+  const current = inputText.value.trimEnd()
+  inputText.value = current ? `${current} ${content}` : content
+}
+
+function finishVoiceInput() {
+  if (voiceHadError) {
+    voiceState.value = 'idle'
+    return
+  }
+
+  appendVoiceInput(`${finalVoiceText}${interimVoiceText}`)
+  voiceState.value = 'idle'
+  finalVoiceText = ''
+  interimVoiceText = ''
+  speechRecognition = null
+}
+
+function startVoice(event) {
+  if (event?.button != null && event.button !== 0) return
+  if (isLoading.value || voiceState.value !== 'idle') return
+
+  if (!SpeechRecognitionCtor) {
+    showToast('当前浏览器不支持语音输入')
+    isVoiceSupported.value = false
+    return
+  }
+
+  finalVoiceText = ''
+  interimVoiceText = ''
+  voiceHadError = false
+  speechRecognition = new SpeechRecognitionCtor()
+  speechRecognition.lang = 'zh-CN'
+  speechRecognition.continuous = true
+  speechRecognition.interimResults = true
+
+  speechRecognition.onresult = (event) => {
+    let finalText = ''
+    let interimText = ''
+
+    for (let i = 0; i < event.results.length; i++) {
+      const text = event.results[i][0]?.transcript || ''
+      if (event.results[i].isFinal) {
+        finalText += text
+      } else {
+        interimText += text
+      }
+    }
+
+    finalVoiceText = finalText
+    interimVoiceText = interimText
+  }
+
+  speechRecognition.onerror = () => {
+    voiceHadError = true
+    voiceState.value = 'idle'
+    showToast('语音识别失败，请重试')
+  }
+
+  speechRecognition.onend = finishVoiceInput
+
+  try {
+    speechRecognition.start()
+    voiceState.value = 'listening'
+  } catch {
+    speechRecognition = null
+    voiceState.value = 'idle'
+    showToast('语音识别失败，请重试')
+  }
+}
+
+function stopVoice() {
+  if (voiceState.value !== 'listening') return
+
+  voiceState.value = 'processing'
+  try {
+    speechRecognition?.stop()
+  } catch {
+    finishVoiceInput()
+  }
+}
+
 function formatTime(iso) {
   if (!iso) return ''
   const date = new Date(iso)
@@ -288,7 +383,20 @@ function formatTime(iso) {
   return date.toISOString().slice(0, 10)
 }
 
-onMounted(initChat)
+onMounted(() => {
+  SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition
+  isVoiceSupported.value = Boolean(SpeechRecognitionCtor)
+  if (!isVoiceSupported.value) {
+    showToast('当前浏览器不支持语音输入')
+  }
+  initChat()
+})
+
+onUnmounted(() => {
+  if (voiceState.value === 'listening') {
+    speechRecognition?.stop()
+  }
+})
 </script>
 
 <template>
@@ -341,6 +449,34 @@ onMounted(initChat)
         :disabled="isLoading"
         @keydown.enter.exact.prevent="sendMessage"
       ></textarea>
+      <button
+        type="button"
+        class="mic-btn"
+        :class="{ recording: isRecording, processing: voiceState === 'processing' }"
+        :disabled="isLoading || !isVoiceSupported"
+        :title="isVoiceSupported ? '按住说话' : '当前浏览器不支持语音输入'"
+        @mousedown="startVoice"
+        @mouseup="stopVoice"
+        @mouseleave="stopVoice"
+        @touchstart.prevent="startVoice"
+        @touchend.prevent="stopVoice"
+      >
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="22" />
+        </svg>
+      </button>
       <button
         type="button"
         class="send-btn"
@@ -654,6 +790,53 @@ onMounted(initChat)
 
 .chat-input:disabled {
   color: #9ca3af;
+}
+
+.mic-btn {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: #F4F4F8;
+  color: #6E73F2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: visible;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mic-btn:hover {
+  background: #EEEDFE;
+}
+
+.mic-btn.recording {
+  background: #FF4D4F;
+  color: white;
+  animation: subtle-pulse 1.5s ease-in-out infinite;
+}
+
+.mic-btn.processing {
+  background: #eef0ff;
+}
+
+.mic-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+@keyframes subtle-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 77, 79, 0);
+  }
 }
 
 .send-btn {
