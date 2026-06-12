@@ -12,7 +12,9 @@
         <p style="margin-top: 12px; font-size: 12px; color: #888;">All features are functional: AI anomaly detection · AI budget planning chat (streaming) · Transaction CRUD · OCR receipt recognition · Voice input · Categories · Budgets</p>
       </div>
 
-      <button @click="enterDemo" class="demo-btn primary">Enter Demo (Shared Account)</button>
+      <button @click="enterDemo" class="demo-btn primary" :disabled="loading">
+        {{ loading ? 'Entering Demo...' : 'Enter Demo (Shared Account)' }}
+      </button>
       <button @click="goToRegister" class="demo-btn secondary">Sign Up (Your Own Account)</button>
 
       <div class="links">
@@ -24,22 +26,29 @@
 </template>
 
 <script setup>
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { showToast } from 'vant'
+import { demoLogin } from '@/api/auth'
+
 const router = useRouter()
+const loading = ref(false)
 
-function enterDemo() {
-  const demoToken = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZW1vQGV4YW1wbGUuY29tIiwidXNlcklkIjoxLCJlbWFpbCI6ImRlbW9AZXhhbXBsZS5jb20iLCJpYXQiOjE3ODA1MzY5ODQsImV4cCI6MTc4MzEyODk4NH0.8MUK39pDkpPHZTcaaHjMgacvLtW0y5CPulkvGQK1sJnXPWgpWt-1lWKx_c1V_fIauXOFshIdxi-cqAhFRnuf_A"
-  const demoUser = {
-    id: 1,
-    username: 'Demo',
-    email: 'demo@example.com',
-    avatarUrl: null,
+async function enterDemo() {
+  if (loading.value) return
+
+  loading.value = true
+  try {
+    const { data } = await demoLogin()
+    localStorage.setItem('token', data.token)
+    localStorage.setItem('user', JSON.stringify(data.user))
+    router.push('/app/home')
+  } catch (error) {
+    const message = error.response?.data?.message || error.response?.data || '演示模式进入失败，请稍后重试'
+    showToast(message)
+  } finally {
+    loading.value = false
   }
-
-  localStorage.setItem('token', demoToken)
-  localStorage.setItem('user', JSON.stringify(demoUser))
-
-  router.push('/app/home')
 }
 
 function goToRegister() {
