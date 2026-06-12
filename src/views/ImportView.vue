@@ -230,7 +230,7 @@ function viewTransactions() {
         </div>
         <div>
           <strong>{{ importResult.skippedNotExpense || 0 }}</strong>
-          <span>跳过(收入)</span>
+          <span>跳过(非支出)</span>
         </div>
         <div>
           <strong>{{ importResult.failed || 0 }}</strong>

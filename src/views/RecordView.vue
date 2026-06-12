@@ -171,7 +171,7 @@ function openCreateCategory() {
   showCreateCategory.value = true
 }
 
-function createCategory() {
+async function createCategory() {
   const name = newCategoryName.value.trim()
   if (!name) {
     showToast('请输入分类名称')
@@ -186,17 +186,21 @@ function createCategory() {
     return
   }
 
-  const created = catStore.addCategory({
-    name,
-    icon: newCategoryIcon.value.trim() || (txType.value === 'income' ? '💰' : '📌'),
-    bg: txType.value === 'income' ? '#d1fae5' : '#eaebfe',
-    color: txType.value === 'income' ? '#059669' : '#6b6ef5',
-    type: txType.value,
-  })
+  try {
+    const created = await catStore.createCategory({
+      name,
+      icon: newCategoryIcon.value.trim() || (txType.value === 'income' ? '💰' : '📌'),
+      bg: txType.value === 'income' ? '#d1fae5' : '#eaebfe',
+      color: txType.value === 'income' ? '#059669' : '#6b6ef5',
+      type: txType.value,
+    })
 
-  selectedCategoryId.value = created.id
-  showCreateCategory.value = false
-  showToast({ message: '分类已创建', icon: 'success' })
+    selectedCategoryId.value = created.id
+    showCreateCategory.value = false
+    showToast({ message: '分类已创建', icon: 'success' })
+  } catch (error) {
+    showToast(error.response?.data?.message || '创建分类失败')
+  }
 }
 
 onMounted(loadCategories)

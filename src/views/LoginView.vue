@@ -30,7 +30,7 @@ async function handleLogin() {
     localStorage.setItem('token', data.token)
     authStore.login(data.user, data.token)
     showToast('登录成功')
-    router.replace('/app/home')
+    router.replace(router.currentRoute.value.query.redirect || '/app/home')
   } catch (error) {
     if (!error.response) {
       showToast('无法连接服务器，请确认后端已启动')

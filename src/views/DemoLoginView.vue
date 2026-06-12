@@ -28,13 +28,16 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 
 function enterDemo() {
-  // 注入一个 demo JWT token（你需要在 backend 上生成一个长期有效的演示 token，
-  // 或者用一个 dummy token——如果 Agent 的 JWT 验证还要解 userId，
-  // 必须用真实 token。建议：用 user_id=1 生成一个 30 天有效期的 token，写死在这里）
-
-  // ⚠️ 暂时占位：用户需要手动填一个真实 token 替换 'DEMO_TOKEN'
   const demoToken = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkZW1vQGV4YW1wbGUuY29tIiwidXNlcklkIjoxLCJlbWFpbCI6ImRlbW9AZXhhbXBsZS5jb20iLCJpYXQiOjE3ODA1MzY5ODQsImV4cCI6MTc4MzEyODk4NH0.8MUK39pDkpPHZTcaaHjMgacvLtW0y5CPulkvGQK1sJnXPWgpWt-1lWKx_c1V_fIauXOFshIdxi-cqAhFRnuf_A"
+  const demoUser = {
+    id: 1,
+    username: 'Demo',
+    email: 'demo@example.com',
+    avatarUrl: null,
+  }
+
   localStorage.setItem('token', demoToken)
+  localStorage.setItem('user', JSON.stringify(demoUser))
 
   router.push('/app/home')
 }

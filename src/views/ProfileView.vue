@@ -35,17 +35,17 @@ async function handleLogout() {
     <!-- Stats -->
     <div class="stats-card">
       <div class="stat-item">
-        <p class="stat-val">42</p>
+        <p class="stat-val">--</p>
         <p class="stat-label">本月记录</p>
       </div>
       <div class="stat-divider"></div>
       <div class="stat-item">
-        <p class="stat-val primary">68%</p>
+        <p class="stat-val primary">--</p>
         <p class="stat-label">AI 自动率</p>
       </div>
       <div class="stat-divider"></div>
       <div class="stat-item">
-        <p class="stat-val">128</p>
+        <p class="stat-val">--</p>
         <p class="stat-label">连续天数</p>
       </div>
     </div>
@@ -96,20 +96,20 @@ async function handleLogout() {
         <van-icon name="arrow" color="#d1d5db" size="16" />
       </div>
       <div class="divider"></div>
-      <div class="menu-item">
+      <div class="menu-item disabled">
         <div class="menu-icon" style="background: #fce7f3">
           <van-icon name="shield-o" color="#db2777" size="20" />
         </div>
         <span class="menu-text">隐私与安全</span>
-        <van-icon name="arrow" color="#d1d5db" size="16" />
+        <span class="menu-desc">即将推出</span>
       </div>
       <div class="divider"></div>
-      <div class="menu-item">
+      <div class="menu-item disabled">
         <div class="menu-icon" style="background: #f3f4f6">
           <van-icon name="question-o" color="#6b7280" size="20" />
         </div>
         <span class="menu-text">帮助与反馈</span>
-        <van-icon name="arrow" color="#d1d5db" size="16" />
+        <span class="menu-desc">即将推出</span>
       </div>
     </div>
 
@@ -229,6 +229,11 @@ async function handleLogout() {
   gap: 12px;
   padding: 14px 16px;
   cursor: pointer;
+}
+
+.menu-item.disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .menu-icon {

@@ -45,4 +45,17 @@ const router = createRouter({
   ],
 })
 
+const publicRouteNames = new Set(['DemoLogin', 'login', 'register'])
+
+router.beforeEach((to) => {
+  if (publicRouteNames.has(to.name)) return true
+
+  const token = localStorage.getItem('token')
+  if (!token) {
+    return { name: 'login', query: { redirect: to.fullPath } }
+  }
+
+  return true
+})
+
 export default router

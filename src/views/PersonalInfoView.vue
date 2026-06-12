@@ -43,7 +43,7 @@ function save() {
       <div class="avatar">
         {{ authStore.user.username.charAt(0).toUpperCase() }}
       </div>
-      <p class="change-avatar">更换头像</p>
+      <p class="change-avatar muted-action">头像暂不可更换</p>
     </div>
 
     <!-- Profile fields -->
@@ -61,11 +61,10 @@ function save() {
         </div>
       </div>
       <div class="divider"></div>
-      <div class="field-row">
+      <div class="field-row disabled">
         <span class="field-label">生日</span>
         <div class="field-right">
           <span class="field-val muted">未设置</span>
-          <van-icon name="arrow" color="#d1d5db" size="14" />
         </div>
       </div>
       <div class="divider"></div>
@@ -86,19 +85,17 @@ function save() {
         </div>
       </div>
       <div class="divider"></div>
-      <div class="field-row">
+      <div class="field-row disabled">
         <span class="field-label">手机号</span>
         <div class="field-right">
-          <span class="field-val muted">+86 ···· 1234</span>
-          <van-icon name="arrow" color="#d1d5db" size="14" />
+          <span class="field-val muted">未绑定</span>
         </div>
       </div>
       <div class="divider"></div>
-      <div class="field-row">
+      <div class="field-row disabled">
         <span class="field-label">修改密码</span>
         <div class="field-right">
-          <van-icon name="edit" color="#6b7280" size="18" />
-          <van-icon name="arrow" color="#d1d5db" size="14" />
+          <span class="field-val muted">暂不支持</span>
         </div>
       </div>
     </div>
@@ -139,6 +136,14 @@ function save() {
   color: #6b6ef5;
   font-weight: 500;
   cursor: pointer;
+}
+
+.field-row.disabled {
+  opacity: 0.6;
+}
+
+.muted-action {
+  color: #9ca3af;
 }
 
 .card {
